@@ -1,9 +1,17 @@
 # Temporary Delve rooms
 
-This fork's Cloudflare deployment provides temporary, account-restricted,
-one-to-one conversations. It is a trusted relay: the operator and Cloudflare
-can read message contents. It does not deploy the native Rust server, public
-paste archive/search, local editor, file transfer, or upstream peer relay.
+This fork's Cloudflare deployment serves the standalone Kant paste editor at
+`pastebin.xware.online` and temporary, account-restricted, one-to-one
+conversations at `pastebin-app.xware.online`. Each app links to the other.
+Rooms use a trusted relay: the operator and Cloudflare can read message contents.
+The native Rust server, public archive/search, IPFS node, file transfer, and
+upstream peer relay are not deployed here.
+
+The editor stores pastes in IndexedDB. Copy/share links encode the whole paste
+in a URL fragment and work without a server. Anyone with the link can read it;
+the links have no encryption or expiry. Server synchronization starts blank and
+is used only when the visitor configures a server. The deployed editor loads
+its QR dependency locally and provides the bundled upstream CLI downloads.
 
 Each creation generates a fresh 128-bit random room locator, with immutable
 membership bound to two Delve DIDs. Authentication uses the official AT Protocol
@@ -66,7 +74,8 @@ and [data security](https://developers.cloudflare.com/durable-objects/reference/
 `wrangler.jsonc` targets the owner's Cloudflare account and these exact domains:
 
 - `pastebin-app.xware.online`: canonical service and OAuth metadata.
-- `pastebin.xware.online`: root and room-link redirects to the canonical service.
+- `pastebin.xware.online`: standalone editor; existing room paths redirect to
+  the canonical room service. Private room APIs are unavailable on this host.
 
 Use authenticated Wrangler, then `npm run deploy`. No subscription upgrade is
 performed; the account's existing plan limits apply. The current configuration

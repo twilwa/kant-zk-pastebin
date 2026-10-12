@@ -1,3 +1,5 @@
+<!-- ABOUTME: Provides the standalone local paste editor and optional server synchronization. -->
+<!-- ABOUTME: Shares readable paste links and links to the separate temporary room service. -->
 <!DOCTYPE html>
 <html lang="en" prefix="schema: http://schema.org/ dcterms: http://purl.org/dc/terms/">
 <head>
@@ -9,12 +11,14 @@
 </head>
 <body vocab="http://schema.org/" typeof="WebApplication">
 <div class="container">
+  <nav aria-label="Kant apps"><strong>Pastebin editor</strong> · <a href="https://pastebin-app.xware.online/">Delve rooms</a></nav>
   <h1 property="name">📋 Kant Pastebin (Static)</h1>
   <p property="description">Browser-based pastebin with optional server sync</p>
+  <p>Pastes stay in this browser unless you share a link or configure a server. Share links contain the paste: anyone with the link can read it. They are not encrypted and do not expire.</p>
   
   <div class="config">
     <label>Server URL (optional):</label>
-    <input type="text" id="serverUrl" placeholder="https://solana.solfunmeme.com/pastebin" value="https://solana.solfunmeme.com/pastebin">
+    <input type="text" id="serverUrl" placeholder="https://your-paste-server.example" value="">
     <button onclick="saveConfig()">💾 Save</button>
   </div>
   
@@ -47,7 +51,7 @@
   <h2>⌨️ Kant CLI</h2>
   <p property="downloadUrl">
     The same protocol from a terminal — join rooms, read, and post with
-    plain <code>curl</code>-grade HTTP.  Zero dependencies, Node ≥ 18:
+    plain <code>curl</code>-grade HTTP. This CLI uses the upstream Kant relay protocol, separate from Delve rooms. Zero dependencies, Node ≥ 18:
   </p>
   <pre>curl -fsSL -o kant-cli.mjs &lt;site-url&gt;/kant-cli.mjs &amp;&amp; chmod +x kant-cli.mjs
 ./kant-cli.mjs open --relay https://kant-relay.cicada71.net

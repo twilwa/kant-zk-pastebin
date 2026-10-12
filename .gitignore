@@ -19,3 +19,8 @@ rust-ipfs
 /build-output-2.log
 /build-output.log
 /logs/
+
+# Bundled Kant CLI deployment artifacts
+/dist/kant-cli.mjs
+/dist/kant-cli.sha256
+/dist/kant-cli.version

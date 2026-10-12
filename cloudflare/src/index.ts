@@ -18,6 +18,7 @@ import {
   roomInput,
   type Result,
 } from "./model";
+import { pastebin } from "./pastebin";
 export { Room } from "./room";
 export { Access } from "./access";
 
@@ -99,13 +100,6 @@ async function limit(env: Env, key: string, count: number, windowMs: number) {
 async function handle(request: Request, env: Env) {
   const url = new URL(request.url);
   if (url.origin !== env.APP_ORIGIN) {
-    if (
-      url.hostname === "pastebin.xware.online" &&
-      request.method === "GET" &&
-      (url.pathname === "/" ||
-        (url.pathname.startsWith("/r/") && roomId(url.pathname.slice(3))))
-    )
-      return Response.redirect(env.APP_ORIGIN + url.pathname, 302);
     throw new InputError("Unknown application origin", 400);
   }
   const path = url.pathname;
@@ -209,6 +203,8 @@ async function handle(request: Request, env: Env) {
 export default {
   async fetch(request, env) {
     try {
+      if (new URL(request.url).origin === env.PASTEBIN_ORIGIN)
+        return await pastebin(request, env);
       return secure(await handle(request, env));
     } catch (error) {
       if (error instanceof InputError)

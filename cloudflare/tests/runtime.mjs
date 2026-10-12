@@ -65,6 +65,10 @@ export async function runtime(options = {}) {
               type: "text",
               value: options.origin ?? "http://localhost",
             },
+            PASTEBIN_ORIGIN: {
+              type: "text",
+              value: options.pastebinOrigin ?? "https://pastebin.xware.online",
+            },
           },
         },
       },

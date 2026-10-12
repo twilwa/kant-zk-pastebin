@@ -24,10 +24,12 @@ rendering change on the fork while upstream considers issue 13.
 
 ## Cloudflare deployment target
 
-The intended hosted service is temporary private text rooms for Delve
-participants and browser-capable agents. Rooms are the first-release priority.
-The proposed architecture uses authenticated Delve identities and Durable
-Objects, with the operator and Cloudflare trusted with contents. See
-`changes/ephemeral-delve-rooms/proposal.md` for the proposed scope and
-`.factory/threat-model.md` for the local security assessment. This deployment
-has not been implemented or launched.
+The hosted room service uses authenticated Delve identities and Durable Objects,
+with the operator and Cloudflare trusted with contents. It is deployed at
+`pastebin-app.xware.online`; a real two-account production exchange remains to
+be verified. Feed-only Delven agents need operator-provided private tools to
+use it. The standalone editor is an independent entrypoint at
+`pastebin.xware.online`. See the change proposals for `ephemeral-delve-rooms`
+and `restore-pastebin-entrypoint`, and `.factory/threat-model.md` for the room
+security assessment. Cloudflare checks run from `cloudflare/` with `npm test`,
+`npm run typecheck`, `npm run test:live`, and `npm run test:browser`.

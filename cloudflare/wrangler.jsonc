@@ -10,11 +10,15 @@
   "workers_dev": false,
   "preview_urls": false,
   "dev": { "ip": "127.0.0.1", "port": 8787 },
-  "vars": { "APP_ORIGIN": "https://pastebin-app.xware.online" },
+  "vars": {
+    "APP_ORIGIN": "https://pastebin-app.xware.online",
+    "PASTEBIN_ORIGIN": "https://pastebin.xware.online",
+  },
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
     "run_worker_first": true,
+    "html_handling": "none",
   },
   "durable_objects": {
     "bindings": [

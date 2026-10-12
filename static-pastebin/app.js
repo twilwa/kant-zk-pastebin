@@ -19,7 +19,7 @@ const DB_NAME = 'kant-pastebin';
 const STORE_NAME = 'pastes';
 
 let db;
-let serverUrl = localStorage.getItem('serverUrl') || 'https://solana.solfunmeme.com/pastebin';
+let serverUrl = localStorage.getItem('serverUrl') ?? document.getElementById('serverUrl').defaultValue;
 
 // Initialize IndexedDB
 function initDB() {
@@ -153,7 +153,7 @@ function loadPastes() {
   request.onsuccess = () => {
     const pastes = request.result.reverse();
     const html = pastes.map(p => {
-      const url = p.serverId ? `${serverUrl}/paste/${p.serverId}` : '';
+      const url = pasteUrl(p);
       return `
       <div class="paste-item ${p.synced ? 'synced' : ''}">
         <strong>${escapeHtml(p.title)}</strong>
@@ -162,6 +162,7 @@ function loadPastes() {
         ${p.ipfsCid ? `<br><code>ipfs cat ${escapeHtml(p.ipfsCid)}</code>` : ''}
         <br><button onclick="viewPaste(${actionArgument(p.id)})">View</button>
         <button onclick="deletePaste(${actionArgument(p.id)})">Delete</button>
+        <button onclick="copyUrl(${actionArgument(url)})">📋 Copy URL</button>
         ${url ? `<button onclick="shareUrl(${actionArgument(url)})">🔗 Share URL</button>` : ''}
         ${url ? `<button onclick="showQR(${actionArgument(url)}, ${actionArgument(p.title)})">📱 QR Code</button>` : ''}
       </div>
@@ -173,41 +174,34 @@ function loadPastes() {
 }
 
 // Share URL
-function shareUrl(url) {
+function pasteUrl(paste) {
   // Encode entire paste content in URL
-  const tx = db.transaction([STORE_NAME], 'readonly');
-  const pasteId = url.split('/').pop();
-  
-  tx.objectStore(STORE_NAME).openCursor().onsuccess = (e) => {
-    const cursor = e.target.result;
-    if (cursor) {
-      const p = cursor.value;
-      if (p.serverId === pasteId) {
-        // Compress and encode entire paste in URL fragment
-        const data = {
-          title: p.title,
-          content: p.content,
-          keywords: p.keywords,
-          timestamp: p.timestamp,
-          ipfs_cid: p.ipfsCid
-        };
-        const encoded = btoa(encodeURIComponent(JSON.stringify(data)));
-        const dataUrl = `${window.location.origin}${window.location.pathname}#paste=${encoded}`;
-        
-        if (navigator.share) {
-          navigator.share({ 
-            url: dataUrl, 
-            title: p.title
-          });
-        } else {
-          navigator.clipboard.writeText(dataUrl);
-          document.getElementById('result').innerHTML = '✅ URL copied to clipboard';
-        }
-        return;
-      }
-      cursor.continue();
-    }
+  const data = {
+    title: paste.title,
+    content: paste.content,
+    keywords: paste.keywords,
+    timestamp: paste.timestamp,
+    ipfs_cid: paste.ipfsCid
   };
+  const encoded = btoa(encodeURIComponent(JSON.stringify(data)));
+  return `${window.location.origin}${window.location.pathname}#paste=${encoded}`;
+}
+
+function shareUrl(url) {
+  if (!navigator.share) return copyUrl(url);
+  navigator.share({ url }).then(() => {
+    document.getElementById('result').textContent = '✅ Link shared';
+  }).catch(() => {
+    document.getElementById('result').textContent = '❌ Link was not shared';
+  });
+}
+
+function copyUrl(url) {
+  return navigator.clipboard.writeText(url).then(() => {
+    document.getElementById('result').textContent = '✅ URL copied to clipboard';
+  }).catch(() => {
+    document.getElementById('result').textContent = '❌ Failed to copy';
+  });
 }
 
 // Show QR Code
@@ -224,7 +218,12 @@ function showQR(url, title) {
   document.body.appendChild(qrDiv);
   
   // Generate QR code
-  generateQR(url, document.getElementById('qrcode'));
+  try {
+    generateQR(url, document.getElementById('qrcode'));
+  } catch {
+    qrDiv.remove();
+    document.getElementById('result').textContent = 'Could not create this QR code. For long pastes, use Share URL or split the text.';
+  }
 }
 
 function copyQR() {

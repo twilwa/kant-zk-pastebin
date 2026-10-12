@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// ABOUTME: Runs Kant room and paste operations from a terminal using HTTP.
+// ABOUTME: Keeps local client state and supports manual message and link exchange.
 /**
  * kant-cli — the kant-zk-pastebin client for a terminal, and for agents.
  *
@@ -233,7 +235,7 @@ function usage() {
   join <text>            join the room named by a pasted message or link
   load <url>             load a URL: join a room, or take in a conversation
   pastebinit [text]      post to the pastebin (default: this client's link;
-  pastebinit --file <f>    or the given text, a file, or stdin with `-`)
+  pastebinit --file <f>    or the given text, a file, or stdin with '-')
   accept [url]           take in a paste: the URL pastebinit printed, or
                          with no argument the latest paste in the spool
   say <text>             say something in the room
