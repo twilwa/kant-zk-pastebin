@@ -178,6 +178,3 @@ test('text and action values round-trip through real HTML parsing', async ({ pag
   }), values);
   expect(actual).toEqual(values.map(value => ({ text: value, elements: 0, argument: value })));
 });
-
-
-
