@@ -1,0 +1,26 @@
+tests/static-pastebin.spec.ts
+  s_1846a70968f2de::t_7a4c5f6ac4ffa9 1-83
+  s_1846a70968f2de::t_4ab2781596a924 84-183
+package-lock.json
+  s_1846a70968f2de::t_ac4ff4f4d4ed1a 2-3,8-12,14-37,45,56-582,597-899,929-1299
+package.json
+  s_1846a70968f2de::t_95dad731df9da4 5-6,10-12
+static-pastebin/app.js
+  s_1846a70968f2de::t_9c71e49ef20ad2 1-2,5-17,134,136,138,159,162-166,218,221,288,321-322
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "4ea91b45c97d05fff1cf711bb3c0f4bfd05fb28b",
+  "prompts": {},
+  "sessions": {
+    "s_1846a70968f2de": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a131a6-d71a-7dd3-b9f6-597048b4dbe0",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "twilwa <spywarezzz@proton.me>"
+    }
+  }
+}
