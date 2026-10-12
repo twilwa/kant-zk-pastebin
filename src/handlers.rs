@@ -1,3 +1,5 @@
+// ABOUTME: Handles native paste creation, browsing, sharing, and archive requests.
+// ABOUTME: Renders untrusted paste metadata safely and persists paste files with checked writes.
 // Handlers - Request handlers for kant-pastebin microservice
 use crate::model::{
     Paste, PasteIndex, Response, SplitMode, SplitProfile, SplitProfileRequest, SplitUnit,
@@ -168,7 +170,7 @@ pub fn write_index_entry(
     ipfs_cid: Option<String>,
     reply_to: Option<String>,
     root: Option<String>,
-) {
+) -> std::io::Result<()> {
     let ngrams = tagging::extract_ngrams(&format!("{} {}", title, keywords.join(" ")), 3, 10);
     let entry = PasteIndex {
         id: id.to_string(),
@@ -186,14 +188,7 @@ pub fn write_index_entry(
         uucp_path: format!("{}/{}", uucp_dir, filename),
         root,
     };
-    let index_file = format!("{}/index.jsonl", uucp_dir);
-    let line = format!("{}\n", serde_json::to_string(&entry).unwrap());
-    fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&index_file)
-        .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()))
-        .ok();
+    append_paste_index(uucp_dir, &entry)
 }
 
 pub fn clean_field(value: &str) -> String {
@@ -257,11 +252,20 @@ pub fn file_description(name: &str, mime: &str, size: usize, data: &[u8]) -> Str
 pub async fn index(
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> Result<HttpResponse> {
-    let reply_to = query.get("reply_to").map(|s| s.as_str()).unwrap_or("");
+    let reply_to = html_escape(query.get("reply_to").map(|s| s.as_str()).unwrap_or(""));
     let base_path = env::var("BASE_PATH").unwrap_or_else(|_| "".to_string());
     let version = option_env!("CARGO_PKG_VERSION").unwrap_or("0.1.0");
     let git_commit = option_env!("GIT_COMMIT").unwrap_or("unknown");
     let build_time = option_env!("BUILD_TIME").unwrap_or("unknown");
+    let companion_links = [
+        ("PASTEBIN_EDITOR_URL", "Standalone editor"),
+        ("ROOMS_URL", "Temporary rooms"),
+    ].iter().filter_map(|(name, label)| {
+        let url = env::var(name).ok()?;
+        let parsed = reqwest::Url::parse(&url).ok()?;
+        if !matches!(parsed.scheme(), "https" | "http") { return None; }
+        Some(format!(r#"<a href="{}">{}</a>"#, html_escape(&url), label))
+    }).collect::<String>();
 
     let html = format!(
         r#"<!DOCTYPE html>
@@ -284,6 +288,7 @@ button{{background:#0f0;color:#000;border:none;padding:10px 20px;cursor:pointer;
 <a href="{base_path}/git-browse">📁 Git</a>
 <a href="{base_path}/splitter/">✂️ Splitter</a>
 <a href="{base_path}/openapi.json">📖 API</a>
+{companion_links}
 </div>
 <h1>📋 Kant Pastebin</h1>
 <p>UUCP + zkTLS + IPFS</p>
@@ -315,7 +320,8 @@ content.addEventListener('keydown', (e) => {{
 function preview() {{
   const div = document.createElement('div');
   div.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:#0a0a0a;z-index:1000;overflow:auto;padding:20px;box-sizing:border-box';
-  div.innerHTML = '<button onclick=\"this.parentElement.remove()\" style=\"position:sticky;top:10px;float:right\">✕ Close</button><pre style=\"white-space:pre-wrap;word-wrap:break-word\">' + content.value + '</pre>';
+  div.innerHTML = '<button onclick=\"this.parentElement.remove()\" style=\"position:sticky;top:10px;float:right\">✕ Close</button><pre style=\"white-space:pre-wrap;word-wrap:break-word\"></pre>';
+  div.querySelector('pre').textContent = content.value;
   document.body.appendChild(div);
 }}
 
@@ -402,6 +408,7 @@ pub async fn create_paste_multipart(mut payload: actix_multipart::Multipart) -> 
     let mut title = None;
     let mut description = None;
     let mut reply_to = None;
+    let mut total_bytes = 0usize;
 
     while let Some(item) = payload.next().await {
         let mut field = item.map_err(|e| actix_web::error::ErrorBadRequest(e))?;
@@ -409,6 +416,10 @@ pub async fn create_paste_multipart(mut payload: actix_multipart::Multipart) -> 
         let mut buf: Vec<u8> = Vec::new();
         while let Some(chunk) = field.next().await {
             let data = chunk.map_err(|e| actix_web::error::ErrorBadRequest(e))?;
+            total_bytes = total_bytes.saturating_add(data.len());
+            if total_bytes > crate::upload_handler::MAX_UPLOAD_BYTES {
+                return Ok(HttpResponse::PayloadTooLarge().json(serde_json::json!({"error": "Upload exceeds 16 MiB"})));
+            }
             buf.extend_from_slice(&data);
         }
         let val = String::from_utf8_lossy(&buf).to_string();
@@ -438,6 +449,9 @@ pub async fn create_paste_multipart(mut payload: actix_multipart::Multipart) -> 
 
 async fn create_paste_inner(paste: Paste) -> Result<HttpResponse> {
     let content = paste.content.as_deref().unwrap_or("");
+    if paste.reply_to.as_deref().is_some_and(|id| !id.is_empty() && !storage::valid_paste_id(id)) {
+        return Ok(HttpResponse::BadRequest().json(serde_json::json!({"error": "Invalid reply_to identifier"})));
+    }
 
     // Detect Wikidata QID — trigger enrichment pipeline
     let trimmed = content.trim();
@@ -498,17 +512,7 @@ async fn create_paste_inner(paste: Paste) -> Result<HttpResponse> {
         }));
     }
 
-    let slug_title = tagging::slugify(title);
-    let slug_keywords = keywords
-        .iter()
-        .map(|k| tagging::slugify(k))
-        .collect::<Vec<_>>()
-        .join("_");
-    let filename = if slug_keywords.is_empty() {
-        format!("{}_{}.txt", ts, slug_title)
-    } else {
-        format!("{}_{}_{}.txt", ts, slug_title, slug_keywords)
-    };
+    let filename = paste_filename(title, &keywords, content);
 
     let id = filename.trim_end_matches(".txt").to_string();
     let uucp = format!("{}/{}", uucp_dir, filename);
@@ -524,8 +528,8 @@ async fn create_paste_inner(paste: Paste) -> Result<HttpResponse> {
         id, title, description, keywords.join(", "), local_cid, witness, ipfs_cid.as_deref().unwrap_or(""), dasl_cid, reply_to_str,
         erdfa_publish::sheaf::sheaf_header(&section),
         content, section.to_rdfa());
-    fs::write(&uucp, paste_content).ok();
-    fs::write(&cid_file, &id).ok();
+    write_paste_file(&uucp, paste_content.as_bytes())
+        .map_err(actix_web::error::ErrorInternalServerError)?;
 
     let ngrams = tagging::extract_ngrams(content, 3, 10);
 
@@ -550,14 +554,9 @@ async fn create_paste_inner(paste: Paste) -> Result<HttpResponse> {
         root: None,
     };
 
-    let index_file = format!("{}/index.jsonl", uucp_dir);
-    let index_line = format!("{}\n", serde_json::to_string(&index_entry).unwrap());
-    fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&index_file)
-        .and_then(|mut f| std::io::Write::write_all(&mut f, index_line.as_bytes()))
-        .ok();
+    append_paste_index(&uucp_dir, &index_entry)
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    fs::write(&cid_file, &id).map_err(actix_web::error::ErrorInternalServerError)?;
 
     Ok(HttpResponse::Ok().json(Response {
         id: id.clone(),
@@ -776,7 +775,7 @@ pub async fn get_paste(
             };
 
             let file_cmd = format!("cat {}/{}.txt", uucp_dir, id);
-            let curl_cmd = format!("curl {}/raw/{}", base_url, id);
+            let curl_cmd = format!("curl {}{}/raw/{}", base_url.trim_end_matches('/'), base_path, id);
 
             // Find related posts by keywords
             let current_entry = entries.iter().find(|e| e.id == id);
@@ -803,7 +802,7 @@ pub async fn get_paste(
                     .map(|e| {
                         format!(
                             r#"<div style="padding:5px"><a href="{}/paste/{}">{}</a></div>"#,
-                            base_path, e.id, e.title
+                            base_path, html_escape(&e.id), html_escape(&e.title)
                         )
                     })
                     .collect();
@@ -901,9 +900,9 @@ pre{{background:#111;padding:20px;border:1px solid #0f0;overflow:auto;max-height
 <a class="reply-btn" href="{bp}/paste/{id}/split">Split</a>
 
 <h3>Access Commands:</h3>
-<div class="cmd" onclick="navigator.clipboard.writeText('{ipfs_cmd}');this.style.borderColor='#0f0'">$ {ipfs_cmd}</div>
-<div class="cmd" onclick="navigator.clipboard.writeText('{file_cmd}');this.style.borderColor='#0f0'">$ {file_cmd}</div>
-<div class="cmd" onclick="navigator.clipboard.writeText('{curl_cmd}');this.style.borderColor='#0f0'">$ {curl_cmd}</div>
+<div class="cmd" onclick="navigator.clipboard.writeText(this.textContent.slice(2));this.style.borderColor='#0f0'">$ {ipfs_cmd}</div>
+<div class="cmd" onclick="navigator.clipboard.writeText(this.textContent.slice(2));this.style.borderColor='#0f0'">$ {file_cmd}</div>
+<div class="cmd" onclick="navigator.clipboard.writeText(this.textContent.slice(2));this.style.borderColor='#0f0'">$ {curl_cmd}</div>
 
 <h3>Content:</h3>
 <pre onclick="navigator.clipboard.writeText(this.textContent);this.style.borderColor='#0ff';setTimeout(()=>this.style.borderColor='#0f0',1500)" style="cursor:pointer">{body}</pre>
@@ -924,10 +923,10 @@ pre{{background:#111;padding:20px;border:1px solid #0f0;overflow:auto;max-height
   <button onclick="document.getElementById('qrModal').style.display='none'">Close</button>
 </div>
 <script>
-const ipfsCid = '{ipfs_cid}';
+const ipfsCid = {ipfs_cid_json};
 const pasteUrl = window.location.href;
-const currentPasteId = '{id}';
-const title = '{title}';
+const currentPasteId = {id_json};
+const title = {title_json};
 console.log('[pastebin][debug] page id=' + currentPasteId + ' title=' + title + ' base_path={bp}');
 console.log('[pastebin][debug] pre present=', !!document.querySelector('pre'));
 console.log('[pastebin][debug] pre count=', document.querySelectorAll('pre').length);
@@ -982,7 +981,8 @@ function showPreview() {{
     ? actualContent 
     : '<html><head><style>body{{font-family:sans-serif;padding:20px;line-height:1.6}}</style></head><body><pre style=\"white-space:pre-wrap;word-wrap:break-word\">' + actualContent + '</pre></body></html>';
   
-  modal.innerHTML = '<button onclick=\"this.parentElement.remove()\" style=\"position:fixed;top:10px;right:10px;z-index:3000;padding:10px 20px;background:#f00;color:#fff;border:none;cursor:pointer\">✕ Close</button><iframe srcdoc=\"' + styledContent.replace(/"/g, '&quot;') + '\"></iframe>';
+  modal.innerHTML = '<button onclick=\"this.parentElement.remove()\" style=\"position:fixed;top:10px;right:10px;z-index:3000;padding:10px 20px;background:#f00;color:#fff;border:none;cursor:pointer\">✕ Close</button><iframe sandbox=""></iframe>';
+  modal.querySelector('iframe').srcdoc = styledContent;
   document.body.appendChild(modal);
 }}
 
@@ -1005,14 +1005,26 @@ function toggleSidebar() {{
       d.results.forEach((r, i) => {{
         const item = document.createElement('div');
         item.className = 'sidebar-item';
-        item.innerHTML = '<input type="checkbox" id="sim-' + i + '" value="' + r.id + '">' +
-          '<label for="sim-' + i + '"><a href="' + r.url + '" onclick="event.stopPropagation()" style="color:#0ff;font-size:13px">' +
-          r.title.slice(0, 40) + '</a><br><span class="ts">' + r.timestamp + '</span></label>';
+        const check = document.createElement('input');
+        check.type = 'checkbox';
+        check.id = 'sim-' + i;
+        check.value = r.id;
+        const label = document.createElement('label');
+        label.htmlFor = check.id;
+        const link = document.createElement('a');
+        link.href = '{bp}/paste/' + encodeURIComponent(r.id);
+        link.textContent = String(r.title || '').slice(0, 40);
+        link.onclick = event => event.stopPropagation();
+        const timestamp = document.createElement('span');
+        timestamp.className = 'ts';
+        timestamp.textContent = r.timestamp;
+        label.append(link, document.createElement('br'), timestamp);
+        item.append(check, label);
         div.appendChild(item);
       }});
     }})
     .catch(e => {{
-      document.getElementById('similarResults').innerHTML = '<div style="color:#f00">Error: ' + e + '</div>';
+      document.getElementById('similarResults').textContent = 'Error: ' + e;
     }});
 }}
 
@@ -1028,27 +1040,29 @@ function bundleSelected() {{
   }})
     .then(r => r.json())
     .then(d => {{
-      window.open(d.url, '_blank');
+      window.open('{bp}' + d.url, '_blank', 'noopener,noreferrer');
       toggleSidebar();
     }})
     .catch(e => alert('Bundle error: ' + e));
 }}
 </script>
-<script src="{share_menu}/static/a11y.js"></script>
+<script src="{bp}/static/a11y.js"></script>
 </body></html>"#,
-                title = page.title,
+                title = html_escape(&page.title),
+                title_json = script_string(&page.title),
                 bp = page.bp,
-                id = page.id,
+                id = html_escape(&page.id),
+                id_json = script_string(&page.id),
                 prev_link = page.prev_link,
                 next_link = page.next_link,
-                ipfs_cmd = page.ipfs_cmd,
-                file_cmd = page.file_cmd,
-                curl_cmd = page.curl_cmd,
-                body = page.body,
+                ipfs_cmd = html_escape(&page.ipfs_cmd),
+                file_cmd = html_escape(&page.file_cmd),
+                curl_cmd = html_escape(&page.curl_cmd),
+                body = html_escape(&page.body),
                 pipelight_tile = page.pipelight_tile,
                 git2nora_tile = page.git2nora_tile,
                 related_html = page.related_html,
-                ipfs_cid = page.ipfs_cid,
+                ipfs_cid_json = script_string(&page.ipfs_cid),
                 share_menu = page.share_menu,
                 share_script = page.share_script
             );
@@ -1110,12 +1124,12 @@ function bundleSelected() {{
             } else if mime.starts_with("image/") {
                 format!(
                     r#"<img src="{}/file/{}" style="max-width:100%;border:1px solid #0f0" alt="{}">"#,
-                    base_path, id, title
+                    base_path, id, html_escape(&title)
                 )
             } else {
                 format!(
                     r#"<p>📎 <a href="{}/file/{}">{}</a> ({}, {} bytes)</p>"#,
-                    base_path, id, title, mime, size
+                    base_path, id, html_escape(&title), html_escape(&mime), html_escape(&size)
                 )
             };
 
@@ -1129,7 +1143,7 @@ function bundleSelected() {{
 <p>CID: {} | IPFS: {}</p>
 {}
 </body></html>"#,
-                title, base_path, base_path, base_path, id, title, cid, ipfs_cid, content_html
+                html_escape(&title), base_path, base_path, base_path, id, html_escape(&title), html_escape(&cid), html_escape(&ipfs_cid), content_html
             );
 
             Ok(HttpResponse::Ok()
@@ -1216,14 +1230,14 @@ function bundleSelected() {{
                     } else if display_mime.starts_with("image/") {
                         format!(
                             r##"<img src="{}/file/{}" style="max-width:100%;border:1px solid #0f0" alt="{}">"##,
-                            base_path, id, title
+                            base_path, id, html_escape(&title)
                         )
                     } else if ext == "mht" || ext == "mhtml" || ext == "mth" {
                         // Render MHT/MTH as inline HTML with download link
                         format!(
                             r##"<p>📎 <a href="{}/file/{}">{}</a> (MHT web archive, {} bytes)</p>
 <iframe src="{}/file/{}" style="width:100%;height:600px;border:1px solid #0f0;background:#fff"></iframe>"##,
-                            base_path, id, title, data.len(), base_path, id
+                            base_path, id, html_escape(&title), data.len(), base_path, id
                         )
                     } else if display_mime.starts_with("text/") {
                         // Escape for safe display
@@ -1240,7 +1254,7 @@ function bundleSelected() {{
                     } else {
                         format!(
                             r##"<p>📎 <a href="{}/file/{}">{}</a> ({}, {} bytes)</p>"##,
-                            base_path, id, title, display_mime, data.len()
+                            base_path, id, html_escape(&title), html_escape(&display_mime), data.len()
                         )
                     };
 
@@ -1254,7 +1268,7 @@ function bundleSelected() {{
 <p>MIME: {} | {} bytes</p>
 {}
 </body></html>"##,
-                        title, base_path, base_path, base_path, id, title, display_mime, data.len(), content_html
+                        html_escape(&title), base_path, base_path, base_path, id, html_escape(&title), html_escape(&display_mime), data.len(), content_html
                     );
 
                     Ok(HttpResponse::Ok()
@@ -2372,7 +2386,7 @@ fn render_browse_page(
         r#"<form method="get"><input type="text" name="q" value="{}" placeholder="Search..." style="padding:5px;width:300px"><button type="submit">🔍</button></form>"#,
         html_escape(q)
     );
-    let title_json = serde_json::to_string(q).unwrap_or_else(|_| "\"browse results\"".to_string());
+    let title_json = script_string(q);
     let export_button = if export_visible {
         format!(
             r#"<button type="button" id="exportVisible" style="background:#0f0;color:#000;border:none;padding:8px 12px;cursor:pointer;margin:10px 5px 10px 0">📤 Export visible as paste</button><button type="button" id="exportChunkedVisible" style="background:#0f0;color:#000;border:none;padding:8px 12px;cursor:pointer;margin:10px 0">🧩 Export chunked</button>"#
@@ -2385,20 +2399,19 @@ fn render_browse_page(
     } else {
         format!(r#"<p style="color:#666">{}</p>"#, html_escape(note))
     };
-    let title = title_json.clone();
     format!(
         r#"<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>Browse Pastes</title>
 <style>body{{font-family:monospace;max-width:800px;margin:20px auto;padding:20px;background:#0a0a0a;color:#0f0}}
 a{{color:#0ff;text-decoration:none}}.excerpt{{color:#0a0;white-space:pre-wrap}}</style>
 </head><body>
-<div><a href="{}/">🏠 Home</a></div>
+<div><a href="{bp}/">🏠 Home</a></div>
 <h1>Browse Pastes</h1>
-{}
-{}
-{}
+{search_box}
+{note}
+{export_button}
 <div id="exportStatus" style="color:#0f0;margin:10px 0"></div>
-<div id="results" style="margin-top:20px">{}</div>
+<div id="results" style="margin-top:20px">{items}</div>
 <script>
 async function exportVisible() {{
   const ids = Array.from(document.querySelectorAll('#results a[href*="/paste/"]')).map(a => a.getAttribute('href').split('/').pop()).filter(Boolean);
@@ -2407,15 +2420,15 @@ async function exportVisible() {{
   const status = document.getElementById('exportStatus');
   btn.disabled = true;
   status.textContent = 'Exporting...';
-  const res = await fetch('{}/api/search-results-bundle', {{
+  const res = await fetch('{bp}/api/search-results-bundle', {{
     method: 'POST',
     headers: {{'Content-Type': 'application/json'}},
-    body: JSON.stringify({{ results: ids.map(id => ({{ id: id }})), title: {} }})
+    body: JSON.stringify({{ results: ids.map(id => ({{ id: id }})), title: {title_literal} }})
   }});
   const data = await res.json();
   if (!res.ok || data.error) {{ status.textContent = 'Export failed: ' + (data.error || 'unknown'); btn.disabled = false; btn.textContent = '📤 Export visible as paste'; return; }}
   status.textContent = 'Opening paste...';
-  const url = (data.url && data.url.startsWith('/paste/')) ? '{}/' + data.url.slice(1) : (data.url || '{}/paste/' + data.id);
+  const url = (data.url && data.url.startsWith('/paste/')) ? '{bp}/' + data.url.slice(1) : (data.url || '{bp}/paste/' + data.id);
   window.location = url;
 }}
 async function exportChunkedVisible() {{
@@ -2426,15 +2439,15 @@ async function exportChunkedVisible() {{
   const chunkSize = Number(prompt('Chunk bytes per paste', '250000'));
   btn.disabled = true;
   status.textContent = 'Deduplicating lines and chunking...';
-  const res = await fetch('{}/api/search-results-chunks', {{
+  const res = await fetch('{bp}/api/search-results-chunks', {{
     method: 'POST',
     headers: {{'Content-Type': 'application/json'}},
-    body: JSON.stringify({{ results: ids.map(id => ({{ id: id }})), title: {}, chunk_size: Number.isFinite(chunkSize) && chunkSize > 0 ? chunkSize : 250000, overlap: 0 }})
+    body: JSON.stringify({{ results: ids.map(id => ({{ id: id }})), title: {title_literal}, chunk_size: Number.isFinite(chunkSize) && chunkSize > 0 ? chunkSize : 250000, overlap: 0 }})
   }});
   const data = await res.json();
   if (!res.ok || data.error) {{ status.textContent = 'Chunk export failed: ' + (data.error || 'unknown'); btn.disabled = false; btn.textContent = '🧩 Export chunked'; return; }}
   status.textContent = 'Opening chunk manifest...';
-  const url = (data.url && data.url.startsWith('/paste/')) ? '{}/' + data.url.slice(1) : (data.url || '{}/paste/' + data.id);
+  const url = (data.url && data.url.startsWith('/paste/')) ? '{bp}/' + data.url.slice(1) : (data.url || '{bp}/paste/' + data.id);
   window.location = url;
 }}
 const exportBtn = document.getElementById('exportVisible');
@@ -2443,29 +2456,24 @@ if (exportBtn) exportBtn.onclick = exportVisible;
 if (exportChunkedBtn) exportChunkedBtn.onclick = exportChunkedVisible;
 </script>
 </body></html>"#,
-        base_path,
-        search_box,
-        note,
-        export_button,
-        items,
-        base_path,
-        title,
-        base_path,
-        base_path,
-        base_path,
-        base_path,
-        base_path,
-        base_path
+        bp = base_path,
+        title_literal = title_json
     )
 }
 
 /// Helper: extract raw paste content from a stored paste file
 /// The stored format wraps content with metadata headers and sheaf RDFa.
 fn read_paste_content_by_id(paste_id: &str) -> Option<String> {
+    if !storage::valid_paste_id(paste_id) {
+        return None;
+    }
     let uucp_dir =
         env::var("UUCP_SPOOL").unwrap_or_else(|_| "/mnt/data1/spool/uucp/pastebin".to_string());
     // A CID permalink (bafk...) is an alias: the .cid file holds the real id.
     let resolved = resolve_cid_alias(&uucp_dir, paste_id);
+    if !storage::valid_paste_id(&resolved) {
+        return None;
+    }
     read_index_entries(&uucp_dir)
         .into_iter()
         .find(|e| e.id == resolved)
@@ -2476,9 +2484,12 @@ fn read_paste_content_by_id(paste_id: &str) -> Option<String> {
 /// A paste's CID permalink names a .cid file whose content is the paste id
 /// it aliases (written by the dedup path of create_paste_inner).
 fn resolve_cid_alias(uucp_dir: &str, paste_id: &str) -> String {
+    if !storage::valid_paste_id(paste_id) {
+        return String::new();
+    }
     let cid_file = format!("{}/{}.cid", uucp_dir, paste_id);
     match std::fs::read_to_string(&cid_file) {
-        Ok(s) if !s.trim().is_empty() => s.trim().to_string(),
+        Ok(s) if storage::valid_paste_id(s.trim()) => s.trim().to_string(),
         _ => paste_id.to_string(),
     }
 }
@@ -2740,7 +2751,7 @@ fn best_excerpt(content: &str, terms: &[String], context: usize) -> String {
 /// Optional: &scope=all|metadata|content
 /// Optional: &limit=N to control result count (default: 50)
 pub async fn api_search(req: HttpRequest) -> Result<HttpResponse> {
-    let Some((search_q, mode, scope, limit, results)) = paste_search_results(&req, 50, true)?
+    let Some((search_q, mode, scope, limit, mut results)) = paste_search_results(&req, 50, true)?
     else {
         return Ok(HttpResponse::BadRequest().json(serde_json::json!({
             "error": "Missing query parameter: q",
@@ -2748,6 +2759,9 @@ pub async fn api_search(req: HttpRequest) -> Result<HttpResponse> {
         })));
     };
     let terms = search_terms(&search_q);
+    for result in &mut results {
+        result.url = with_base_url(&result.url);
+    }
 
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "query": &search_q,
@@ -3204,7 +3218,7 @@ pub async fn api_similar(
             keywords: entry.keywords.clone(),
             match_type: "similarity".to_string(),
             excerpt,
-            url: format!("/paste/{}", entry.id),
+            url: with_base_url(&format!("/paste/{}", entry.id)),
             timestamp: entry.timestamp.clone(),
             size: entry.size,
             score,
@@ -3241,14 +3255,20 @@ pub async fn api_bundle(body: web::Json<serde_json::Value>) -> Result<HttpRespon
             })))
         }
     };
+    if pastes.iter().any(|id| !id.as_str().is_some_and(storage::valid_paste_id)) {
+        return Ok(HttpResponse::BadRequest().json(serde_json::json!({"error": "Invalid paste identifier"})));
+    }
+
+    let pastes = unique_export_ids(pastes.iter().filter_map(|id| id.as_str().map(str::to_string)).collect())?;
+    let mut export_bytes = 0usize;
 
     let uucp_dir =
         env::var("UUCP_SPOOL").unwrap_or_else(|_| "/mnt/data1/spool/uucp/pastebin".to_string());
 
     // Collect all paste data
     let mut nodes: Vec<serde_json::Value> = Vec::new();
-    for paste_id in pastes {
-        let pid = paste_id.as_str().unwrap_or("");
+    for paste_id in &pastes {
+        let pid = paste_id.as_str();
         if pid.is_empty() {
             continue;
         }
@@ -3262,7 +3282,10 @@ pub async fn api_bundle(body: web::Json<serde_json::Value>) -> Result<HttpRespon
         });
 
         // Read content
-        let content = read_paste_content(&format!("{}/{}.txt", uucp_dir, pid));
+        let content = read_paste_content_by_id(pid);
+        let metadata_bytes = entry.as_ref().map(|entry| serde_json::to_vec(entry).map(|json| json.len()).unwrap_or(0)).unwrap_or(0);
+        export_bytes = export_bytes.saturating_add(content.as_ref().map_or(0, String::len).saturating_mul(6) + metadata_bytes + 1024);
+        check_export_budget(pastes.len(), export_bytes)?;
 
         let node = serde_json::json!({
             "id": pid,
@@ -3300,26 +3323,14 @@ pub async fn api_bundle(body: web::Json<serde_json::Value>) -> Result<HttpRespon
     let ts = Utc::now().format("%Y%m%d_%H%M%S").to_string();
     let pastes_str: String = pastes
         .iter()
-        .filter_map(|v| v.as_str())
+        .map(String::as_str)
         .collect::<Vec<_>>()
         .join("_");
     let title = format!(
         "dag-bundle-{}",
         &pastes_str.chars().take(40).collect::<String>()
     );
-    let filename = format!(
-        "{}_{}.cbor",
-        ts,
-        title
-            .clone()
-            .chars()
-            .map(|c| if c.is_alphanumeric() || c == '-' {
-                c
-            } else {
-                '_'
-            })
-            .collect::<String>()
-    );
+    let filename = paste_filename(&title, &[], &json_str).replace(".txt", ".cbor");
     let id = filename.trim_end_matches(".cbor").to_string();
     let uucp = format!("{}/{}", uucp_dir, filename);
 
@@ -3330,11 +3341,11 @@ pub async fn api_bundle(body: web::Json<serde_json::Value>) -> Result<HttpRespon
     let witness = hex::encode(&hash);
 
     // Write the CBOR file
-    fs::write(&uucp, &cbor_bytes).ok();
+    write_paste_file(&uucp, &cbor_bytes).map_err(actix_web::error::ErrorInternalServerError)?;
 
     // Write a JSON sidecar (human-readable)
     let json_path = format!("{}/{}.json", uucp_dir, id);
-    fs::write(&json_path, &json_str).ok();
+    write_paste_file(&json_path, json_str.as_bytes()).map_err(actix_web::error::ErrorInternalServerError)?;
 
     // Also write the JSON as a .txt for viewing in the pastebin
     let txt_uucp = format!("{}/{}.txt", uucp_dir, id);
@@ -3343,7 +3354,7 @@ pub async fn api_bundle(body: web::Json<serde_json::Value>) -> Result<HttpRespon
         id, title, local_cid, witness, cbor_bytes.len(),
         json_str
     );
-    fs::write(&txt_uucp, &txt_content).ok();
+    write_paste_file(&txt_uucp, txt_content.as_bytes()).map_err(actix_web::error::ErrorInternalServerError)?;
 
     // Write index entry
     let keywords = vec![
@@ -3372,14 +3383,8 @@ pub async fn api_bundle(body: web::Json<serde_json::Value>) -> Result<HttpRespon
         uucp_path: uucp.clone(),
         root: None,
     };
-    let index_file = format!("{}/index.jsonl", uucp_dir);
-    let index_line = format!("{}\n", serde_json::to_string(&index_entry).unwrap());
-    fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&index_file)
-        .and_then(|mut f| std::io::Write::write_all(&mut f, index_line.as_bytes()))
-        .ok();
+    append_paste_index(&uucp_dir, &index_entry)
+        .map_err(actix_web::error::ErrorInternalServerError)?;
 
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "id": id,
@@ -3409,7 +3414,10 @@ pub async fn api_search_results_bundle(body: web::Json<serde_json::Value>) -> Re
         })
         .unwrap_or_default();
 
-    if ids.is_empty() {
+    let ids = unique_export_ids(ids)?;
+    let mut export_bytes = 0usize;
+
+    if ids.is_empty() || ids.iter().any(|id| !storage::valid_paste_id(id)) {
         return Ok(HttpResponse::BadRequest().json(serde_json::json!({
             "error": "Missing or empty 'results' array"
         })));
@@ -3445,6 +3453,8 @@ pub async fn api_search_results_bundle(body: web::Json<serde_json::Value>) -> Re
             .unwrap_or_else(|| format!("{}/{}.txt", uucp_dir, pid));
         let content =
             read_paste_content(&uucp_path).unwrap_or_else(|| "[content unavailable]".to_string());
+        export_bytes = export_bytes.saturating_add(content.len() + entry.map(|entry| entry.title.len() + entry.keywords.iter().map(String::len).sum::<usize>()).unwrap_or(0) + 1024);
+        check_export_budget(ids.len(), export_bytes)?;
         bundle.push_str(&format!(
             "\n\n===== Result {}/{} =====\nID: {}\nTitle: {}\nTimestamp: {}\nKeywords: {}\nURL: /paste/{}\n\n{}\n",
             idx + 1,
@@ -3501,17 +3511,7 @@ async fn create_chunked_paste(
     } else {
         title.to_string()
     };
-    let slug_title = tagging::slugify(&title_owned);
-    let slug_keywords = keywords
-        .iter()
-        .map(|k| tagging::slugify(k))
-        .collect::<Vec<_>>()
-        .join("_");
-    let filename = if slug_keywords.is_empty() {
-        format!("{}_{}.txt", ts, slug_title)
-    } else {
-        format!("{}_{}_{}.txt", ts, slug_title, slug_keywords)
-    };
+    let filename = paste_filename(&title_owned, &keywords, &content);
     let id = filename.trim_end_matches(".txt").to_string();
     let uucp_dir =
         env::var("UUCP_SPOOL").unwrap_or_else(|_| "/mnt/data1/spool/uucp/pastebin".to_string());
@@ -3538,8 +3538,8 @@ async fn create_chunked_paste(
         content,
         section.to_rdfa()
     );
-    fs::write(&uucp, paste_content).ok();
-    fs::write(format!("{}/{}.cid", uucp_dir, local_cid), &id).ok();
+    write_paste_file(&uucp, paste_content.as_bytes())
+        .map_err(actix_web::error::ErrorInternalServerError)?;
 
     let index_entry = PasteIndex {
         id: id.clone(),
@@ -3561,13 +3561,10 @@ async fn create_chunked_paste(
         uucp_path: uucp.clone(),
         root: None,
     };
-    let index_line = format!("{}\n", serde_json::to_string(&index_entry).unwrap());
-    fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(format!("{}/index.jsonl", uucp_dir))
-        .and_then(|mut f| std::io::Write::write_all(&mut f, index_line.as_bytes()))
-        .ok();
+    append_paste_index(&uucp_dir, &index_entry)
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    fs::write(format!("{}/{}.cid", uucp_dir, local_cid), &id)
+        .map_err(actix_web::error::ErrorInternalServerError)?;
 
     Ok(StoredChunkPaste {
         id: index_entry.id.clone(),
@@ -3592,7 +3589,10 @@ pub async fn api_search_results_chunks(body: web::Json<serde_json::Value>) -> Re
         })
         .unwrap_or_default();
 
-    if ids.is_empty() {
+    let ids = unique_export_ids(ids)?;
+    let mut export_bytes = 0usize;
+
+    if ids.is_empty() || ids.iter().any(|id| !storage::valid_paste_id(id)) {
         return Ok(HttpResponse::BadRequest().json(serde_json::json!({
             "error": "Missing or empty 'results' array"
         })));
@@ -3626,6 +3626,8 @@ pub async fn api_search_results_chunks(body: web::Json<serde_json::Value>) -> Re
             .and_then(|e| read_paste_content(&e.uucp_path))
             .or_else(|| read_paste_content(&format!("{}/{}.txt", uucp_dir, pid)))
             .unwrap_or_else(|| "[content unavailable]".to_string());
+        export_bytes = export_bytes.saturating_add(content.len());
+        check_export_budget(ids.len(), export_bytes)?;
         all_lines.extend(content.lines().map(|line| line.to_string()));
     }
 
@@ -3639,8 +3641,10 @@ pub async fn api_search_results_chunks(body: web::Json<serde_json::Value>) -> Re
         }
     }
 
+    let chunks = build_line_chunks(&unique_lines, chunk_size, overlap)?;
+    let chunk_bytes = chunks.iter().map(|chunk| chunk.line_ids.iter().map(|id| unique_lines[*id].len() + 1).sum::<usize>()).sum::<usize>();
+    check_export_budget(chunks.len(), chunk_bytes.saturating_mul(6))?;
     let line_store = create_chunk_line_store(&title, &unique_lines).await?;
-    let chunks = build_line_chunks(&unique_lines, chunk_size, overlap);
     let mut chunk_infos: Vec<serde_json::Value> = Vec::new();
 
     for (idx, chunk) in chunks.iter().enumerate() {
@@ -3746,12 +3750,13 @@ struct LineChunk {
     line_ids: Vec<usize>,
 }
 
-fn build_line_chunks(lines: &[String], chunk_size: usize, overlap: usize) -> Vec<LineChunk> {
+fn build_line_chunks(lines: &[String], chunk_size: usize, overlap: usize) -> Result<Vec<LineChunk>> {
     if lines.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let mut chunks: Vec<LineChunk> = Vec::new();
     let mut start = 0usize;
+    let mut export_bytes = 0usize;
     while start < lines.len() {
         let mut end = start;
         let mut bytes = 0usize;
@@ -3766,6 +3771,8 @@ fn build_line_chunks(lines: &[String], chunk_size: usize, overlap: usize) -> Vec
         if end == start {
             end = start + 1;
         }
+        export_bytes = export_bytes.saturating_add(bytes.saturating_mul(6));
+        check_export_budget(chunks.len() + 1, export_bytes)?;
         let line_ids: Vec<usize> = (start..end).collect();
         chunks.push(LineChunk {
             start_line: start,
@@ -3775,9 +3782,9 @@ fn build_line_chunks(lines: &[String], chunk_size: usize, overlap: usize) -> Vec
         if end == lines.len() {
             break;
         }
-        start = end.saturating_sub(overlap);
+        start = end.saturating_sub(overlap).max(start + 1);
     }
-    chunks
+    Ok(chunks)
 }
 
 fn chunk_text(lines: &[String], chunk: &LineChunk) -> String {
@@ -3928,9 +3935,21 @@ pub async fn run_plugin(
 /// Temporary in-memory storage for extracted archives keyed by session ID.
 use std::sync::Mutex;
 
+type ArchiveSessions = HashMap<String, (std::time::Instant, crate::archive::ArchiveResult)>;
+
 lazy_static::lazy_static! {
-    static ref ARCHIVE_STORE: Mutex<HashMap<String, crate::archive::ArchiveResult>> =
+    static ref ARCHIVE_STORE: Mutex<ArchiveSessions> =
         Mutex::new(HashMap::new());
+}
+
+fn prune_archive_sessions(sessions: &mut ArchiveSessions) {
+    sessions.retain(|_, (created, _)| created.elapsed() < std::time::Duration::from_secs(3600));
+}
+
+fn archive_sessions() -> std::sync::MutexGuard<'static, ArchiveSessions> {
+    let mut sessions = ARCHIVE_STORE.lock().unwrap();
+    prune_archive_sessions(&mut sessions);
+    sessions
 }
 
 /// POST /upload-archive — upload a .tar.gz/.zip/etc., extract, return listing
@@ -3944,6 +3963,7 @@ pub async fn upload_archive(mut payload: actix_multipart::Multipart) -> Result<H
     let mut orig_name = String::new();
     let mut title = String::new();
     let mut description = String::new();
+    let mut total_bytes = 0usize;
 
     while let Some(item) = payload.next().await {
         let mut field = item.map_err(|e| actix_web::error::ErrorBadRequest(e))?;
@@ -3951,6 +3971,10 @@ pub async fn upload_archive(mut payload: actix_multipart::Multipart) -> Result<H
         let mut buf: Vec<u8> = Vec::new();
         while let Some(chunk) = field.next().await {
             let data = chunk.map_err(|e| actix_web::error::ErrorBadRequest(e))?;
+            total_bytes = total_bytes.saturating_add(data.len());
+            if total_bytes > crate::upload_handler::MAX_UPLOAD_BYTES {
+                return Ok(HttpResponse::PayloadTooLarge().json(serde_json::json!({"error": "Upload exceeds 16 MiB"})));
+            }
             buf.extend_from_slice(&data);
         }
         match field_name.as_str() {
@@ -3975,6 +3999,13 @@ pub async fn upload_archive(mut payload: actix_multipart::Multipart) -> Result<H
         return Ok(HttpResponse::BadRequest().json(serde_json::json!({"error": "no file"})));
     }
 
+    let mut sessions = archive_sessions();
+    if sessions.len() >= 8 {
+        return Ok(HttpResponse::TooManyRequests()
+            .insert_header(("Retry-After", "3600"))
+            .json(serde_json::json!({"error": "Archive preview capacity reached; sessions expire after one hour"})));
+    }
+
     // Extract the archive
     let mut result = match crate::archive::extract(&file_data, &orig_name) {
         Ok(r) => r,
@@ -3993,15 +4024,13 @@ pub async fn upload_archive(mut payload: actix_multipart::Multipart) -> Result<H
     // Generate a session ID
     let mut hasher = Sha256::new();
     hasher.update(&file_data);
-    hasher.update(ts.as_bytes());
+    hasher.update(Utc::now().format("%Y%m%d_%H%M%S%f").to_string().as_bytes());
     let session_id = hex::encode(&hasher.finalize())[..16].to_string();
 
     // Store for later access
     let entry_count = result.entries.len();
-    ARCHIVE_STORE
-        .lock()
-        .unwrap()
-        .insert(session_id.clone(), result);
+    sessions.insert(session_id.clone(), (std::time::Instant::now(), result));
+    drop(sessions);
 
     // ── Register the archive file itself in the spool + index ──────────
     let uucp_dir = env::var("UUCP_SPOOL").unwrap_or_else(|_| "/var/spool/uucp".to_string());
@@ -4011,9 +4040,8 @@ pub async fn upload_archive(mut payload: actix_multipart::Multipart) -> Result<H
     let local_cid = format!("bafk{}", hex::encode(&hash[..16]));
     let witness = hex::encode(&hash);
     let ipfs_cid = ipfs::ipfs_add_bytes(&file_data);
-    let slug = tagging::slugify(&title);
-    let ext = orig_name.rsplit('.').next().unwrap_or("bin");
-    let filename = format!("{}_{}.{}", ts, slug, ext);
+    let ext = crate::upload_handler::safe_extension(&orig_name);
+    let filename = crate::upload_handler::upload_filename(&ts, &title, &ext);
     let steam_id = filename
         .rsplit_once('.')
         .map(|(s, _)| s)
@@ -4022,14 +4050,19 @@ pub async fn upload_archive(mut payload: actix_multipart::Multipart) -> Result<H
     let uucp = format!("{}/{}", uucp_dir, filename);
 
     // Write the raw archive file to spool
-    fs::write(&uucp, &file_data).ok();
+    write_paste_file(&uucp, &file_data).map_err(actix_web::error::ErrorInternalServerError)?;
     // Write metadata sidecar
     let meta = format!("--- {} ---\nTitle: {}\nDescription: {}\nMime: application/octet-stream\nCID: {}\nWitness: {}\nIPFS: {}\nSize: {}\nEntries: {}\n",
         steam_id, title, description, local_cid, witness, ipfs_cid.as_deref().unwrap_or(""), file_data.len(), entry_count);
-    fs::write(format!("{}.meta", uucp), &meta).ok();
+    write_paste_file(&format!("{}.meta", uucp), meta.as_bytes())
+        .map_err(actix_web::error::ErrorInternalServerError)?;
     // CID dedup file
     let cid_file = format!("{}/{}.cid", uucp_dir, local_cid);
-    fs::write(&cid_file, &steam_id).ok();
+    match write_paste_file(&cid_file, steam_id.as_bytes()) {
+        Ok(()) => {},
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {},
+        Err(error) => return Err(actix_web::error::ErrorInternalServerError(error)),
+    }
     // Index entry
     write_index_entry(
         &uucp_dir,
@@ -4044,7 +4077,7 @@ pub async fn upload_archive(mut payload: actix_multipart::Multipart) -> Result<H
         ipfs_cid,
         None,
         Some(session_id.clone()),
-    );
+    ).map_err(actix_web::error::ErrorInternalServerError)?;
 
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "session_id": session_id,
@@ -4062,9 +4095,9 @@ pub async fn upload_archive(mut payload: actix_multipart::Multipart) -> Result<H
 /// GET /archive-viewer/{session_id} — HTML view of extracted files with checkboxes
 pub async fn archive_viewer(path: web::Path<String>) -> Result<HttpResponse> {
     let session_id = path.into_inner();
-    let store = ARCHIVE_STORE.lock().unwrap();
+    let store = archive_sessions();
     let result = match store.get(&session_id) {
-        Some(r) => r,
+        Some((_, r)) => r,
         None => return Ok(HttpResponse::NotFound().body("Archive session not found or expired")),
     };
 
@@ -4090,18 +4123,18 @@ pub async fn archive_viewer(path: web::Path<String>) -> Result<HttpResponse> {
             let has_preview = entry.content.is_some();
             let preview_btn = if has_preview {
                 format!(
-                    r#"<button class="preview-btn" onclick="previewFile({},'{}')">👁️</button>"#,
+                    r#"<button class="preview-btn" onclick="previewFile({},{})">👁️</button>"#,
                     i,
-                    html_escape(&entry.path)
+                    html_escape(&script_string(&entry.path))
                 )
             } else {
                 String::new()
             };
             let post_btn = if has_preview {
                 format!(
-                    r#"<button class="post-btn" onclick="postFile({},'{}')">📤</button>"#,
+                    r#"<button class="post-btn" onclick="postFile({},{})">📤</button>"#,
                     i,
-                    html_escape(&entry.path)
+                    html_escape(&script_string(&entry.path))
                 )
             } else {
                 String::new()
@@ -4157,6 +4190,7 @@ input[type="checkbox"]{{accent-color:#0f0}}
 </div>
 <h1>📦 Archive: {}</h1>
 <p class="summary">{} files · {} total · {} entries</p>
+<p class="summary">This archive preview expires after one hour. Uploaded archive files remain in the pastebin.</p>
 
 <div class="actions">
   <label><input type="checkbox" id="selectAll" onchange="toggleAll()"> Select All</label>
@@ -4256,12 +4290,12 @@ async function postFile(idx, name) {{
 }}
 </script>
 </body></html>"#,
-        result.filename,
+        html_escape(&result.filename),
         base_path,
         base_path,
         base_path,
         base_path,
-        result.filename,
+        html_escape(&result.filename),
         result.entry_count,
         format_size(result.total_size),
         result.entries.len(),
@@ -4282,11 +4316,11 @@ pub async fn archive_generate(
     body: web::Json<HashMap<String, Vec<String>>>,
 ) -> Result<HttpResponse> {
     let session_id = path.into_inner();
-    let files = body.into_inner().remove("files").unwrap_or_default();
+    let files = unique_export_ids(body.into_inner().remove("files").unwrap_or_default())?;
 
-    let store = ARCHIVE_STORE.lock().unwrap();
+    let store = archive_sessions();
     let result = match store.get(&session_id) {
-        Some(r) => r,
+        Some((_, r)) => r,
         None => {
             return Ok(
                 HttpResponse::NotFound().json(serde_json::json!({"error": "Session expired"}))
@@ -4309,6 +4343,10 @@ pub async fn archive_generate(
     } else {
         result.description.clone()
     };
+
+    let selected_bytes = files.iter().filter_map(|path| result.entries.iter().find(|entry| entry.path == *path))
+        .map(|entry| entry.content.as_ref().map_or(0, String::len) + entry.path.len() + 256).sum();
+    check_export_budget(files.len(), selected_bytes)?;
 
     // Build a table of contents
     let mut allm = String::new();
@@ -4341,13 +4379,7 @@ pub async fn archive_generate(
 
     // Save as a paste
     let uucp_dir = env::var("UUCP_SPOOL").unwrap_or_else(|_| "/var/spool/uucp".to_string());
-    let ts = Utc::now().format("%Y%m%d_%H%M%S").to_string();
-    let slug_title = if post_title.trim().is_empty() {
-        "all".to_string()
-    } else {
-        tagging::slugify(&post_title)
-    };
-    let filename = format!("{}_all_{}.txt", ts, slug_title);
+    let filename = paste_filename(&post_title, &["allm".to_string(), "archive".to_string()], &allm);
     let id = filename.trim_end_matches(".txt").to_string();
     let uucp = format!("{}/{}", uucp_dir, filename);
 
@@ -4362,9 +4394,10 @@ pub async fn archive_generate(
     let paste_content = format!("--- {} ---\nTitle: {}\nDescription: {}\nKeywords: allm, archive, {}\nCID: {}\nWitness: {}\nIPFS: {}\n\n{}\n",
         id, post_title, post_description, result.filename, local_cid, witness, ipfs_cid.as_deref().unwrap_or(""), allm);
 
-    fs::write(&uucp, &paste_content).ok();
+    write_paste_file(&uucp, paste_content.as_bytes())
+        .map_err(actix_web::error::ErrorInternalServerError)?;
     let cid_file = format!("{}/{}.cid", uucp_dir, local_cid);
-    fs::write(&cid_file, &id).ok();
+    fs::write(&cid_file, &id).map_err(actix_web::error::ErrorInternalServerError)?;
     // Index entry so the allm appears in browse
     write_index_entry(
         &uucp_dir,
@@ -4379,7 +4412,7 @@ pub async fn archive_generate(
         ipfs_cid,
         None,
         None,
-    );
+    ).map_err(actix_web::error::ErrorInternalServerError)?;
 
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "id": id,
@@ -4399,17 +4432,21 @@ pub async fn archive_split(
     body: web::Json<HashMap<String, Vec<String>>>,
 ) -> Result<HttpResponse> {
     let session_id = path.into_inner();
-    let files = body.into_inner().remove("files").unwrap_or_default();
+    let files = unique_export_ids(body.into_inner().remove("files").unwrap_or_default())?;
 
-    let store = ARCHIVE_STORE.lock().unwrap();
+    let store = archive_sessions();
     let result = match store.get(&session_id) {
-        Some(r) => r,
+        Some((_, r)) => r,
         None => {
             return Ok(
                 HttpResponse::NotFound().json(serde_json::json!({"error": "Session expired"}))
             )
         }
     };
+
+    let selected_bytes = files.iter().filter_map(|path| result.entries.iter().find(|entry| entry.path == *path))
+        .map(|entry| entry.content.as_ref().map_or(0, String::len) + entry.path.len() + 256).sum();
+    check_export_budget(files.len(), selected_bytes)?;
 
     // Collect text from selected files
     let mut all_text = String::new();
@@ -4440,12 +4477,11 @@ pub async fn archive_split(
     );
 
     let uucp_dir = env::var("UUCP_SPOOL").unwrap_or_else(|_| "/var/spool/uucp".to_string());
-    let ts = Utc::now().format("%Y%m%d_%H%M%S").to_string();
     let mut chunk_ids = Vec::new();
 
     for (i, chunk) in chunks.iter().enumerate() {
-        let chunk_name = format!("split_{}_part{:04}", ts, i);
-        let filename = format!("{}.txt", chunk_name);
+        let filename = paste_filename(&format!("{} chunk {}", result.filename, i + 1), &["split".to_string()], chunk);
+        let chunk_name = filename.trim_end_matches(".txt").to_string();
         let uucp = format!("{}/{}", uucp_dir, filename);
 
         let mut hasher = Sha256::new();
@@ -4457,7 +4493,8 @@ pub async fn archive_split(
         let paste_content = format!("--- {} ---\nTitle: {} (chunk {}/{})\nKeywords: split, chunk\nCID: {}\nWitness: {}\n\n{}\n",
             chunk_name, result.filename, i + 1, chunks.len(), local_cid, witness, chunk);
 
-        fs::write(&uucp, &paste_content).ok();
+        write_paste_file(&uucp, paste_content.as_bytes())
+            .map_err(actix_web::error::ErrorInternalServerError)?;
         chunk_ids.push(chunk_name);
     }
 
@@ -4476,10 +4513,11 @@ pub async fn archive_split(
             .map(|(i, id)| format!("Chunk {:04}: /paste/{}\n", i, id))
             .collect::<String>();
 
-    let index_id = format!("split_index_{}", ts);
-    let idx_filename = format!("{}.txt", index_id);
+    let idx_filename = paste_filename(&result.filename, &["split_index".to_string()], &index_content);
+    let index_id = idx_filename.trim_end_matches(".txt").to_string();
     let idx_uucp = format!("{}/{}", uucp_dir, idx_filename);
-    fs::write(&idx_uucp, &index_content).ok();
+    write_paste_file(&idx_uucp, index_content.as_bytes())
+        .map_err(actix_web::error::ErrorInternalServerError)?;
 
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "chunks": chunks.len(),
@@ -4492,9 +4530,9 @@ pub async fn archive_split(
 /// GET /archive-preview/{session_id}/{index} — JSON preview of a single file
 pub async fn archive_preview(path: web::Path<(String, usize)>) -> Result<HttpResponse> {
     let (session_id, idx) = path.into_inner();
-    let store = ARCHIVE_STORE.lock().unwrap();
+    let store = archive_sessions();
     let result = match store.get(&session_id) {
-        Some(r) => r,
+        Some((_, r)) => r,
         None => {
             return Ok(
                 HttpResponse::NotFound().json(serde_json::json!({"error": "Session expired"}))
@@ -4518,9 +4556,9 @@ pub async fn archive_preview(path: web::Path<(String, usize)>) -> Result<HttpRes
 /// POST /archive-post-file/{session_id}/{idx} — post a single file from archive as a paste
 pub async fn archive_post_file(path: web::Path<(String, usize)>) -> Result<HttpResponse> {
     let (session_id, idx) = path.into_inner();
-    let store = ARCHIVE_STORE.lock().unwrap();
+    let store = archive_sessions();
     let result = match store.get(&session_id) {
-        Some(r) => r,
+        Some((_, r)) => r,
         None => {
             return Ok(
                 HttpResponse::NotFound().json(serde_json::json!({"error": "Session expired"}))
@@ -4547,10 +4585,8 @@ pub async fn archive_post_file(path: web::Path<(String, usize)>) -> Result<HttpR
 
     // Build paste content
     let uucp_dir = env::var("UUCP_SPOOL").unwrap_or_else(|_| "/var/spool/uucp".to_string());
-    let ts = Utc::now().format("%Y%m%d_%H%M%S").to_string();
-    let slug_title = tagging::slugify(&entry.path);
-    let filename = format!("{}_{}.txt", ts, slug_title);
-    let id = format!("{}_{}", ts, slug_title);
+    let filename = paste_filename(&entry.path, &["archive".to_string()], content);
+    let id = filename.trim_end_matches(".txt").to_string();
     let uucp = format!("{}/{}", uucp_dir, filename);
 
     let mut hasher = Sha256::new();
@@ -4564,9 +4600,10 @@ pub async fn archive_post_file(path: web::Path<(String, usize)>) -> Result<HttpR
     let paste_content = format!("--- {} ---\nTitle: {}\nDescription: {}\nKeywords: archive, {}\nCID: {}\nWitness: {}\nIPFS: {}\n\n--- From archive: {} ---\n\n{}\n",
         id, entry.path, post_description, result.title, local_cid, witness, ipfs_cid.as_deref().unwrap_or(""), result.filename, content);
 
-    fs::write(&uucp, &paste_content).ok();
+    write_paste_file(&uucp, paste_content.as_bytes())
+        .map_err(actix_web::error::ErrorInternalServerError)?;
     let cid_file = format!("{}/{}.cid", uucp_dir, local_cid);
-    fs::write(&cid_file, &id).ok();
+    fs::write(&cid_file, &id).map_err(actix_web::error::ErrorInternalServerError)?;
 
     // Index entry
     write_index_entry(
@@ -4582,7 +4619,7 @@ pub async fn archive_post_file(path: web::Path<(String, usize)>) -> Result<HttpR
         ipfs_cid,
         None,
         None,
-    );
+    ).map_err(actix_web::error::ErrorInternalServerError)?;
 
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "id": id,
@@ -4715,7 +4752,11 @@ function renderProfileCards() {{
     const size = formatUnitValue(p.chunk_size, p.unit);
     const overlap = formatUnitValue(p.overlap, p.unit);
     const context = formatUnitValue(p.context_window, p.unit);
-    card.innerHTML = p.label + '<div class="profile-info">' + size + ' chunks · ' + overlap + ' overlap · ' + context + ' context · ' + p.max_output_tokens + ' out</div>';
+    card.textContent = p.label;
+    const info = document.createElement('div');
+    info.className = 'profile-info';
+    info.textContent = size + ' chunks · ' + overlap + ' overlap · ' + context + ' context · ' + p.max_output_tokens + ' out';
+    card.appendChild(info);
     card.onclick = () => selectProfile(p.name);
     container.appendChild(card);
   }});
@@ -4735,7 +4776,7 @@ function updateUnitLabels(unit) {{
 function selectProfile(name) {{
   activeProfile = name;
   document.querySelectorAll('.profile-card').forEach(c => c.classList.remove('active'));
-  document.querySelector('.profile-card[data-name="'+name+'"]')?.classList.add('active');
+  document.querySelectorAll('.profile-card').forEach(c => {{ if (c.dataset.name === name) c.classList.add('active'); }});
   if (name === 'custom') {{
     document.getElementById('profileDesc').textContent = 'Custom — adjust chunk size, overlap, unit, and split mode manually';
     return;
@@ -4916,12 +4957,14 @@ pub async fn api_split_paste(body: web::Json<serde_json::Value>) -> Result<HttpR
         profile_name,
     ) = split_options;
 
+    check_split_budget(&content, effective_chunk_size, &effective_unit)?;
     let chunks = crate::splitter::split_text(
         &content,
         effective_chunk_size,
         effective_unit.clone(),
         effective_split_mode.clone(),
     );
+    check_export_budget(chunks.len(), content.len().saturating_mul(2))?;
     let overlapped = crate::splitter::apply_overlap(
         chunks,
         effective_overlap,
@@ -5066,12 +5109,14 @@ pub async fn api_split_upload(body: web::Json<serde_json::Value>) -> Result<Http
         return Ok(HttpResponse::BadRequest().json(serde_json::json!({"error": "empty content"})));
     }
 
+    check_split_budget(&content, effective_chunk_size, &effective_unit)?;
     let chunks = crate::splitter::split_text(
         &content,
         effective_chunk_size,
         effective_unit.clone(),
         effective_split_mode.clone(),
     );
+    check_export_budget(chunks.len(), content.len().saturating_mul(2))?;
     let overlapped = crate::splitter::apply_overlap(
         chunks,
         effective_overlap,
@@ -5080,12 +5125,11 @@ pub async fn api_split_upload(body: web::Json<serde_json::Value>) -> Result<Http
     );
 
     let uucp_dir = env::var("UUCP_SPOOL").unwrap_or_else(|_| "/var/spool/uucp".to_string());
-    let ts = Utc::now().format("%Y%m%d_%H%M%S").to_string();
     let mut chunk_ids = Vec::new();
 
     for (i, chunk) in overlapped.iter().enumerate() {
-        let id = format!("{}_{}_part{:04}", ts, title, i);
-        let filename = format!("{}.txt", id);
+        let filename = paste_filename(&format!("{} part {}", title, i), &["split".to_string()], chunk);
+        let id = filename.trim_end_matches(".txt").to_string();
         let uucp = format!("{}/{}", uucp_dir, filename);
 
         let mut hasher = Sha256::new();
@@ -5097,14 +5141,12 @@ pub async fn api_split_upload(body: web::Json<serde_json::Value>) -> Result<Http
         let paste_content = format!("--- {} ---\nTitle: {} (chunk {}/{})\nKeywords: split, chunk\nCID: {}\nWitness: {}\n\n{}\n",
             id, title, i + 1, overlapped.len(), local_cid, witness, chunk);
 
-        fs::write(&uucp, &paste_content).ok();
+        write_paste_file(&uucp, paste_content.as_bytes())
+            .map_err(actix_web::error::ErrorInternalServerError)?;
         chunk_ids.push(id);
     }
 
     // Index paste
-    let index_id = format!("{}_{}_index", ts, title);
-    let index_filename = format!("{}.txt", index_id);
-    let index_uucp = format!("{}/{}", uucp_dir, index_filename);
     let index_content = format!(
         "=== Split Index ===\nTitle: {}\nDate: {}\nTotal chunks: {}\nProfile: {}\n\n{}\n",
         title,
@@ -5117,7 +5159,11 @@ pub async fn api_split_upload(body: web::Json<serde_json::Value>) -> Result<Http
             .map(|(i, id)| format!("Chunk {:04}: /paste/{}\n", i, id))
             .collect::<String>()
     );
-    fs::write(&index_uucp, &index_content).ok();
+    let index_filename = paste_filename(&title, &["split_index".to_string()], &index_content);
+    let index_id = index_filename.trim_end_matches(".txt").to_string();
+    let index_uucp = format!("{}/{}", uucp_dir, index_filename);
+    write_paste_file(&index_uucp, index_content.as_bytes())
+        .map_err(actix_web::error::ErrorInternalServerError)?;
 
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "chunks": overlapped.len(),
@@ -5194,12 +5240,78 @@ fn parse_split_mode(value: &str) -> std::result::Result<SplitMode, String> {
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
+const MAX_EXPORT_ITEMS: usize = 1024;
+const MAX_EXPORT_BYTES: usize = 64 * 1024 * 1024;
+
+fn check_export_budget(items: usize, bytes: usize) -> Result<()> {
+    if items > MAX_EXPORT_ITEMS || bytes > MAX_EXPORT_BYTES {
+        return Err(actix_web::error::ErrorPayloadTooLarge("Exports are limited to 1024 items and 64 MiB"));
+    }
+    Ok(())
+}
+
+fn unique_export_ids(mut ids: Vec<String>) -> Result<Vec<String>> {
+    check_export_budget(ids.len(), 0)?;
+    let mut seen = std::collections::HashSet::new();
+    ids.retain(|id| seen.insert(id.clone()));
+    Ok(ids)
+}
+
+fn check_split_budget(content: &str, chunk_size: usize, unit: &crate::model::SplitUnit) -> Result<()> {
+    let units = match unit {
+        crate::model::SplitUnit::Byte => content.len(),
+        crate::model::SplitUnit::Word => crate::splitter::count_words(content),
+        crate::model::SplitUnit::Token => crate::splitter::estimate_tokens(content),
+    };
+    check_export_budget(units.div_ceil(chunk_size.max(1)), content.len())
+}
+
+fn paste_filename(title: &str, keywords: &[String], content: &str) -> String {
+    let truncate = |value: String, limit: usize| -> String {
+        let mut bytes = 0;
+        value.chars().take_while(|ch| {
+            bytes += ch.len_utf8();
+            bytes <= limit
+        }).collect()
+    };
+    let title = truncate(tagging::slugify(title), 80);
+    let keywords = truncate(tagging::slugify(&keywords.join("_")), 40);
+    let hash = Sha256::digest(content.as_bytes());
+    format!("{}_{}_{}_{}.txt", Utc::now().format("%Y%m%d_%H%M%S%f"), title, keywords, hex::encode(&hash[..16]))
+}
+
+fn write_paste_file(path: &str, content: &[u8]) -> std::io::Result<()> {
+    let mut file = fs::OpenOptions::new().write(true).create_new(true).open(path)?;
+    file.write_all(content)?;
+    file.sync_all()
+}
+
+fn append_paste_index(uucp_dir: &str, entry: &PasteIndex) -> std::io::Result<()> {
+    static WRITES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = WRITES.lock().map_err(|_| std::io::Error::other("paste index lock unavailable"))?;
+    let line = format!("{}\n", serde_json::to_string(entry)?);
+    let mut file = fs::OpenOptions::new().create(true).append(true)
+        .open(format!("{}/index.jsonl", uucp_dir))?;
+    file.write_all(line.as_bytes())?;
+    file.sync_all()
+}
+
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
+}
+
+fn script_string(value: &str) -> String {
+    serde_json::to_string(value)
+        .expect("strings serialize to JSON")
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('&', "\\u0026")
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029")
 }
 
 fn format_size(size: u64) -> String {
@@ -5754,6 +5866,88 @@ pub async fn api_git_reindex() -> Result<HttpResponse> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_chunks_advance_when_overlap_covers_a_chunk() {
+        let lines = vec!["x".repeat(8001), "second line".to_string(), "third line".to_string()];
+        for overlap in [1, 100] {
+            let chunks = build_line_chunks(&lines, 8000, overlap).unwrap();
+            assert_eq!(chunks.len(), 2);
+            assert_eq!(chunks[0].line_ids, vec![0]);
+            assert_eq!(chunks[1].line_ids, vec![1, 2]);
+        }
+    }
+
+    #[test]
+    fn export_budgets_bound_expansion_and_deduplicate_selections() {
+        assert!(check_export_budget(1025, 0).is_err());
+        assert!(check_export_budget(1, MAX_EXPORT_BYTES + 1).is_err());
+        assert_eq!(unique_export_ids(vec!["a".into(), "a".into(), "b".into()]).unwrap(), vec!["a", "b"]);
+        assert!(check_split_budget(&"a".repeat(1025), 1, &crate::model::SplitUnit::Byte).is_err());
+        assert!(check_split_budget("hello world", 6, &crate::model::SplitUnit::Byte).is_ok());
+    }
+
+    #[test]
+    fn browse_exports_keep_titles_and_mounted_routes_in_separate_script_fields() {
+        for base_path in ["", "/native"] {
+            let html = render_browse_page(base_path, "a '</script>", "", "", true);
+            let title = script_string("a '</script>");
+            assert!(html.contains(&format!("title: {} }})", title)));
+            assert!(html.contains(&format!("title: {}, chunk_size:", title)));
+            assert!(html.contains(&format!("fetch('{}/api/search-results-bundle'", base_path)));
+            assert!(html.contains(&format!("fetch('{}/api/search-results-chunks'", base_path)));
+        }
+    }
+
+    #[test]
+    fn inline_script_strings_preserve_text_without_html_delimiters() {
+        let value = "'</script><svg onload=alert(1)> & \u{2028}\u{2029}";
+        let encoded = script_string(value);
+        assert!(!encoded.contains('<'));
+        assert!(!encoded.contains('>'));
+        assert!(!encoded.contains('&'));
+        assert_eq!(serde_json::from_str::<String>(&encoded).unwrap(), value);
+    }
+
+    #[test]
+    fn generated_paste_filenames_bound_unicode_metadata_and_separate_content() {
+        let title = "文".repeat(100);
+        let keywords = vec!["長".repeat(100)];
+        let first = paste_filename(&title, &keywords, "first");
+        let second = paste_filename(&title, &keywords, "second");
+        assert_ne!(first, second);
+        assert!(storage::valid_paste_id(first.trim_end_matches(".txt")));
+        assert!(first.len() < 200);
+    }
+
+    #[test]
+    fn paste_file_writes_preserve_existing_content_and_report_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("paste.txt");
+        write_paste_file(path.to_str().unwrap(), b"first").unwrap();
+        assert_eq!(write_paste_file(path.to_str().unwrap(), b"second").unwrap_err().kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&path).unwrap(), b"first");
+        assert!(write_paste_file(dir.path().join("missing/paste.txt").to_str().unwrap(), b"missing").is_err());
+    }
+
+    #[test]
+    fn archive_sessions_expire_without_removing_live_previews() {
+        let result = || crate::archive::ArchiveResult {
+            filename: "test.tar".to_string(),
+            title: "test".to_string(),
+            description: String::new(),
+            entries: vec![],
+            total_size: 0,
+            entry_count: 0,
+        };
+        let now = std::time::Instant::now();
+        let mut sessions = ArchiveSessions::new();
+        sessions.insert("expired".to_string(), (now - std::time::Duration::from_secs(3601), result()));
+        sessions.insert("live".to_string(), (now, result()));
+        prune_archive_sessions(&mut sessions);
+        assert!(!sessions.contains_key("expired"));
+        assert!(sessions.contains_key("live"));
+    }
 
     #[test]
     fn similarity_score_prefers_shared_keywords_and_content_terms() {

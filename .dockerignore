@@ -4,6 +4,11 @@ result-*
 .git/
 *.nix
 *.lock
+!Cargo.lock
 test-results/
 node_modules/
 hf-deploy/
+
+cloudflare/node_modules/
+cloudflare/public/
+scratchpad/

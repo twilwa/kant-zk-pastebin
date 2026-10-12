@@ -3,9 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test tests/model.test.mjs tests/rooms.test.mjs tests/api.test.mjs",
+    "test": "node --test tests/model.test.mjs tests/rooms.test.mjs tests/api.test.mjs tests/native.test.mjs",
     "test:live": "node --test tests/auth.test.mjs",
     "test:browser": "npm run build && node --test tests/browser.test.mjs tests/pastebin.test.mjs",
+    "test:native": "npm run build && node --test tests/native-browser.test.mjs",
     "typecheck": "wrangler types && tsc --noEmit",
     "build": "node scripts/build.mjs",
     "dev": "npm run build && wrangler dev --var APP_ORIGIN:http://127.0.0.1:8787",

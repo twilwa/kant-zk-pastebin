@@ -13,6 +13,7 @@
   "vars": {
     "APP_ORIGIN": "https://pastebin-app.xware.online",
     "PASTEBIN_ORIGIN": "https://pastebin.xware.online",
+    "NATIVE_ORIGIN": "https://pastebin-origin.xware.online",
   },
   "assets": {
     "directory": "./public",
@@ -27,6 +28,13 @@
     ],
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room", "Access"] }],
+  "ratelimits": [
+    {
+      "name": "NATIVE_WRITES",
+      "namespace_id": "2001",
+      "simple": { "limit": 10, "period": 60 },
+    },
+  ],
   "routes": [
     { "pattern": "pastebin-app.xware.online", "custom_domain": true },
     { "pattern": "pastebin.xware.online", "custom_domain": true },

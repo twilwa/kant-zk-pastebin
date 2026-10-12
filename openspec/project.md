@@ -5,8 +5,9 @@ Kant ZK Pastebin includes a native Rust HTTP server, a browser application in
 
 ## Development
 
-The native server uses Actix Web, filesystem storage, and packages from the
-custom Nora Cargo registry. Its full build requires access to that registry.
+The native server uses Actix Web and filesystem storage. Its Docker build uses
+pinned public dependencies and a committed lockfile. See
+`docs/native-deployment.md` for the persistent CI service and public boundary.
 The static editor uses plain JavaScript, IndexedDB, and an external QR library.
 You can serve its directory with any static HTTP server.
 

@@ -1,0 +1,14 @@
+# ABOUTME: Mounts a bounded persistent filesystem for public pastebin storage.
+# ABOUTME: Keeps uploaded data from exhausting the CI host's root filesystem.
+[Unit]
+Description=Kant pastebin persistent data
+Before=kant-pastebin.service
+
+[Mount]
+What=/opt/kant-pastebin/data.ext4
+Where=/opt/kant-pastebin/data
+Type=ext4
+Options=loop,nodev,nosuid,noexec
+
+[Install]
+WantedBy=local-fs.target

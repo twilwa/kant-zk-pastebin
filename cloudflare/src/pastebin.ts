@@ -1,5 +1,5 @@
-// ABOUTME: Serves the standalone paste editor without room sessions or private APIs.
-// ABOUTME: Keeps existing short room links directed to the authenticated room service.
+// ABOUTME: Serves the local paste editor and proxies hosted pastebin requests.
+// ABOUTME: Isolates origin credentials and directs room links to the room service.
 import { roomId } from "./model";
 
 const assets = new Set([
@@ -11,8 +11,80 @@ const assets = new Set([
   "/kant-cli.version",
 ]);
 
+const maxBodyBytes = 16 * 1024 * 1024;
+
+async function native(request: Request, env: Env) {
+  if (!env.NATIVE_ORIGIN || !env.NATIVE_ORIGIN_TOKEN)
+    return new Response("Hosted pastebin unavailable", { status: 503 });
+  const url = new URL(request.url);
+  if (url.pathname === "/native") {
+    url.pathname = "/native/";
+    return Response.redirect(url.href, 308);
+  }
+  if (Number(request.headers.get("Content-Length")) > maxBodyBytes)
+    return new Response("Request exceeds 16 MiB", { status: 413 });
+  if (!["GET", "HEAD"].includes(request.method)) {
+    const { success } = await env.NATIVE_WRITES.limit({
+      key: "native:" + (request.headers.get("CF-Connecting-IP") ?? "unknown"),
+    });
+    if (!success)
+      return new Response("Too many writes; try again in a minute", {
+        status: 429,
+        headers: { "Retry-After": "60" },
+      });
+  }
+  let body: Uint8Array | undefined;
+  if (request.body) {
+    const reader = request.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let length = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > maxBodyBytes) {
+        await reader.cancel();
+        return new Response("Request exceeds 16 MiB", { status: 413 });
+      }
+      chunks.push(value);
+    }
+    body = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of chunks) {
+      body.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+  }
+  const target = new URL(env.NATIVE_ORIGIN);
+  target.pathname = url.pathname.slice("/native".length);
+  target.search = url.search;
+  const headers = new Headers();
+  for (const name of [
+    "Accept",
+    "Accept-Language",
+    "Content-Type",
+    "If-None-Match",
+    "If-Modified-Since",
+    "Range",
+    "If-Range",
+  ]) {
+    const value = request.headers.get(name);
+    if (value !== null) headers.set(name, value);
+  }
+  headers.set("User-Agent", "OpenAI File Downloader, XaiImageApiFetch/1.0");
+  headers.set("X-Kant-Origin-Token", env.NATIVE_ORIGIN_TOKEN);
+  return fetch(target, {
+    method: request.method,
+    headers,
+    body,
+    redirect: "manual",
+  });
+}
+
 export async function pastebin(request: Request, env: Env) {
   const url = new URL(request.url);
+  if (url.pathname === "/native" || url.pathname.startsWith("/native/"))
+    return native(request, env);
   let response: Response;
   if (!["GET", "HEAD"].includes(request.method)) {
     response = new Response("Method not allowed", {

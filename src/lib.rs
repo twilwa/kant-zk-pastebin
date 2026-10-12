@@ -1,3 +1,5 @@
+// ABOUTME: Exposes the native pastebin modules for integrations and tests.
+// ABOUTME: Shares storage, rendering, and upload behavior with the server binary.
 // Modules
 pub mod api;
 pub mod archive;
@@ -16,4 +18,5 @@ pub mod splitter;
 pub mod storage;
 pub mod summary;
 pub mod tagging;
+pub mod upload_handler;
 pub mod view;

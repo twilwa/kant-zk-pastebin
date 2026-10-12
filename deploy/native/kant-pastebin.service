@@ -1,0 +1,18 @@
+# ABOUTME: Runs the persistent native pastebin in an isolated resource-limited container.
+# ABOUTME: Exposes its authenticated origin only on the host loopback interface.
+[Unit]
+Description=Kant pastebin native service
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/opt/kant-pastebin/data
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+TimeoutStopSec=40
+ExecStart=/usr/bin/podman run --rm --name kant-pastebin --user 10001:10001 --read-only --cap-drop=ALL --security-opt=no-new-privileges --cpus=2 --memory=2g --pids-limit=128 --tmpfs /tmp:rw,size=128m,noexec,nosuid,nodev --log-driver=k8s-file --log-opt=max-size=10m -p 127.0.0.1:18091:8090 --env-file=/opt/kant-pastebin/credentials/server.env -e BASE_URL=https://pastebin.xware.online -e PASTEBIN_EDITOR_URL=https://pastebin.xware.online/ -e ROOMS_URL=https://pastebin-app.xware.online/ -v /opt/kant-pastebin/data:/data localhost/kant-pastebin:deployed
+ExecStop=/usr/bin/podman stop --time 30 kant-pastebin
+
+[Install]
+WantedBy=multi-user.target

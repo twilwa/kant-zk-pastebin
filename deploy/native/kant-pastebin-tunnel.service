@@ -1,0 +1,17 @@
+# ABOUTME: Connects the private native pastebin origin to Cloudflare Tunnel.
+# ABOUTME: Loads the scoped tunnel credential from a root-readable environment file.
+[Unit]
+Description=Kant pastebin Cloudflare Tunnel
+After=network-online.target kant-pastebin.service
+Wants=network-online.target kant-pastebin.service
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+TimeoutStopSec=40
+ExecStart=/usr/bin/podman run --rm --name kant-pastebin-tunnel --network=host --read-only --cap-drop=ALL --security-opt=no-new-privileges --cpus=0.5 --memory=256m --pids-limit=64 --log-driver=k8s-file --log-opt=max-size=10m --env-file=/opt/kant-pastebin/credentials/tunnel.env docker.io/cloudflare/cloudflared:2026.10.0@sha256:1a50cc8893b3f0dd283805d2efcd3336210aced60a83d967fb2bbc8ab69b5f35 tunnel --no-autoupdate --metrics 127.0.0.1:18092 run
+ExecStop=/usr/bin/podman stop --time 30 kant-pastebin-tunnel
+
+[Install]
+WantedBy=multi-user.target

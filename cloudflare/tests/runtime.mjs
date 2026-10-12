@@ -69,6 +69,20 @@ export async function runtime(options = {}) {
               type: "text",
               value: options.pastebinOrigin ?? "https://pastebin.xware.online",
             },
+            NATIVE_ORIGIN: {
+              type: "text",
+              value:
+                options.nativeOrigin ?? "https://pastebin-origin.xware.online",
+            },
+            NATIVE_ORIGIN_TOKEN: {
+              type: "text",
+              value: options.nativeToken ?? "",
+            },
+            NATIVE_WRITES: {
+              type: "rate-limit",
+              namespace: "2001",
+              simple: { limit: 10, period: 60 },
+            },
           },
         },
       },

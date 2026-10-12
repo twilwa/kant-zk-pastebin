@@ -1,4 +1,7 @@
+// ABOUTME: Runs the native pastebin HTTP service and its command-line operations.
+// ABOUTME: Configures persistent storage, plugins, and the public request boundary.
 use actix_cors::Cors;
+use actix_web::dev::Service;
 use actix_web::{web, App, HttpServer};
 use clap::{Parser, Subcommand, ValueEnum};
 use model::{SplitMode, SplitProfile, SplitUnit};
@@ -8,21 +11,22 @@ use utoipa_swagger_ui::SwaggerUi;
 
 mod api;
 mod dasl;
-mod upload_handler;
-mod svg_anim;
 mod gallery;
 mod handlers;
 mod ipfs;
 mod model;
 mod plugin;
 mod plugins;
+mod public;
 mod rename;
 mod share;
 mod sheaf;
 mod storage;
 mod summary;
+mod svg_anim;
 mod tagging;
 mod tiles;
+mod upload_handler;
 mod view;
 
 mod archive;
@@ -489,9 +493,16 @@ async fn main() -> std::io::Result<()> {
 
     let registry = web::Data::new(std::sync::Mutex::new(registry));
 
+    let public_mode = env::var("PUBLIC_MODE").as_deref() == Ok("1");
+    let origin_token = env::var("NATIVE_ORIGIN_TOKEN").ok().map(|value| {
+        use sha2::Digest;
+        sha2::Sha256::digest(value.as_bytes()).to_vec()
+    });
+
     let openapi = ApiDoc::openapi();
 
     HttpServer::new(move || {
+        let origin_token = origin_token.clone();
         let cors = Cors::default()
             .allow_any_origin()
             .allow_any_method()
@@ -500,15 +511,71 @@ async fn main() -> std::io::Result<()> {
 
         App::new()
             .wrap(cors)
+            .wrap_fn(move |mut req, srv| {
+                use futures_util::future::{ready, Either};
+                let path = req.path().to_string();
+                let authenticated_origin = origin_token.as_ref().map_or(true, |expected| {
+                    use sha2::Digest;
+                    req.headers()
+                        .get("x-kant-origin-token")
+                        .map_or(false, |provided| {
+                            sha2::Sha256::digest(provided.as_bytes()).as_slice()
+                                == expected.as_slice()
+                        })
+                });
+                if !authenticated_origin || (public_mode && !public::public_path(&path)) {
+                    return Either::Left(ready(Ok(req
+                        .into_response(actix_web::HttpResponse::NotFound()
+                            .insert_header(("cache-control", "no-store"))
+                            .finish())
+                        .map_into_right_body())));
+                }
+                req.headers_mut().remove("x-kant-origin-token");
+                let future = srv.call(req);
+                Either::Right(async move {
+                    let mut response = future.await?;
+                    if public_mode {
+                        use actix_web::http::header::{HeaderName, HeaderValue};
+                        for (name, value) in [
+                            ("content-security-policy", public::content_policy(&path)),
+                            ("x-content-type-options", "nosniff"),
+                            ("referrer-policy", "no-referrer"),
+                            ("cache-control", "no-store"),
+                        ] {
+                            response.headers_mut().insert(
+                                HeaderName::from_static(name),
+                                HeaderValue::from_static(value),
+                            );
+                        }
+                    }
+                    Ok(response.map_into_left_body())
+                })
+            })
             .app_data(registry.clone())
-            .app_data(web::PayloadConfig::new(256 * 1024 * 1024)) // 256MB max upload
+            .app_data(web::PayloadConfig::new(if public_mode {
+                16 * 1024 * 1024
+            } else {
+                256 * 1024 * 1024
+            })) // 256MB max upload for private instances
+            .app_data(web::JsonConfig::default().limit(2 * 1024 * 1024))
             .service(SwaggerUi::new("/swagger-ui/{_:.*}").url("/openapi.json", openapi.clone()))
             .route("/", web::get().to(handlers::index))
+            .route(
+                "/static/a11y.js",
+                web::get().to(|| async {
+                    actix_web::HttpResponse::Ok()
+                        .content_type("text/javascript; charset=utf-8")
+                        .body(include_str!("../static/a11y.js"))
+                }),
+            )
             .route("/browse", web::get().to(handlers::browse))
             .route("/threads", web::get().to(handlers::threads))
             .route("/paste", web::post().to(handlers::create_paste))
             .route("/paste-form", web::post().to(handlers::create_paste_form))
-            .route("/paste-multipart", web::post().to(handlers::create_paste_multipart))
+            .route(
+                "/paste-multipart",
+                web::post().to(handlers::create_paste_multipart),
+            )
             .route("/paste/{id}", web::get().to(handlers::get_paste))
             .route(
                 "/paste/{id}/split",

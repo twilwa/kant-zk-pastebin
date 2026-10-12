@@ -1,3 +1,5 @@
+// ABOUTME: Renders native paste, thread, search, and preview pages.
+// ABOUTME: Escapes stored metadata and source text before inserting it into HTML.
 // View - HTML rendering for kant-pastebin
 use crate::model::{PasteIndex, ThreadPost};
 
@@ -9,7 +11,7 @@ pub fn render_paste(paste: &PasteIndex, content: &str, base_path: &str) -> Strin
 <div style="background:#111;border-left:3px solid #00f;padding:10px;margin:10px 0;color:#00f">
     ↩️ In reply to: <a href="{bp}/paste/{rid}" style="color:#0ff">{rid}</a>
 </div>"#,
-            rid = reply_id,
+            rid = html_escape(reply_id),
             bp = base_path
         )
     } else {
@@ -41,7 +43,7 @@ pub fn render_paste(paste: &PasteIndex, content: &str, base_path: &str) -> Strin
     <button class="reply-btn" onclick="copyRaw()">📋 Copy HTML</button>
     <pre id="src">{content}</pre>
     <script>
-    console.log('[pastebin][debug] render_paste id={pid} title={title} base_path={bp} content_len={content_len}');
+    console.log('[pastebin][debug] render_paste title=', document.title, 'content_len={content_len}');
     console.log('[pastebin][debug] pre#src present=', !!document.getElementById('src'));
     console.log('[pastebin][debug] document.querySelectorAll("pre").length=', document.querySelectorAll('pre').length);
     if (!document.getElementById('src')) console.error('[pastebin][lint] missing #src pre');
@@ -57,10 +59,10 @@ pub fn render_paste(paste: &PasteIndex, content: &str, base_path: &str) -> Strin
     </script>
 </body>
 </html>"#,
-        title = paste.title,
+        title = html_escape(&paste.title),
         bp = base_path,
-        pid = paste.id,
-        ts = paste.timestamp,
+        pid = html_escape(&paste.id),
+        ts = html_escape(&paste.timestamp),
         reply = reply_info,
         content = html_escape(content),
         content_len = content.len()
@@ -286,7 +288,7 @@ pub fn render_thread_page(
             let reply = post
                 .reply_to
                 .as_ref()
-                .map(|rid| format!(r#" <span class="meta">↩ {rid}</span>"#))
+                .map(|rid| format!(r#" <span class="meta">↩ {}</span>"#, html_escape(rid)))
                 .unwrap_or_default();
             let desc = post
                 .description
@@ -523,7 +525,7 @@ pub fn render_preview(id: &str, content: &str) -> String {
     <pre>{content}</pre>
 </body>
 </html>"#,
-        id = id,
+        id = html_escape(id),
         content = html_escape(content)
     )
 }

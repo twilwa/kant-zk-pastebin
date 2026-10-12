@@ -1,3 +1,5 @@
+// ABOUTME: Renders the public gallery of uploaded media and configured NFT records.
+// ABOUTME: Restricts gallery filter values to supported categories and time windows.
 use actix_web::{web, HttpResponse, Result};
 use chrono::{DateTime, Datelike, Utc};
 use log::warn;
@@ -83,8 +85,12 @@ pub async fn gallery(query: web::Query<std::collections::HashMap<String, String>
     let uucp_dir = env::var("UUCP_SPOOL")
         .unwrap_or_else(|_| "/var/spool/uucp/pastebin".to_string());
 
-    let time_filter = query.get("time").map(|s| s.as_str()).unwrap_or("all");
-    let cat_filter = query.get("cat").map(|s| s.as_str()).unwrap_or("all");
+    let time_filter = query.get("time").map(|s| s.as_str())
+        .filter(|value| ["all", "today", "week", "month"].contains(value))
+        .unwrap_or("all");
+    let cat_filter = query.get("cat").map(|s| s.as_str())
+        .filter(|value| ["all", "svg", "image", "gif", "video"].contains(value))
+        .unwrap_or("all");
 
     let now = Utc::now();
     let time_cutoff = match time_filter {

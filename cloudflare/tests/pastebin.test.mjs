@@ -106,6 +106,9 @@ test("standalone editor shares local text between browsers without uploading it"
     await expect(page.locator("#pasteList")).toContainText("No pastes yet");
     await expect(page.locator("#serverUrl")).toHaveValue("");
     await expect(
+      page.getByRole("link", { name: "Hosted pastebin", exact: true }),
+    ).toHaveAttribute("href", "https://pastebin.xware.online/native/");
+    await expect(
       page.getByRole("link", { name: "Delve rooms", exact: true }),
     ).toHaveAttribute("href", "https://pastebin-app.xware.online/");
     const title = "Local <note> & café";
