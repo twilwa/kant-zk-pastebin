@@ -1,0 +1,67 @@
+cloudflare/tests/runtime.mjs
+  s_1846a70968f2de::t_7ed77b74fae90c 68-71
+static-pastebin/app.js
+  s_1846a70968f2de::t_948d3e31e53b02 22,156,177,179-184,186-190,194,204
+  s_1846a70968f2de::t_5dc89a36a54abe 221-226
+  s_1846a70968f2de::t_b003a18e256743 165,191-193,196-203
+  s_1846a70968f2de::t_d402a82caf36c8 195
+cloudflare/README.md
+  s_1846a70968f2de::t_5dc89a36a54abe 3-14,77-78
+static-pastebin/style.css
+  s_1846a70968f2de::t_948d3e31e53b02 1-2,22
+  s_1846a70968f2de::t_fa971698dc18d9 23-25
+cloudflare/wrangler.jsonc
+  s_1846a70968f2de::t_948d3e31e53b02 13-16,21
+cloudflare/scripts/build.mjs
+  s_1846a70968f2de::t_5dc89a36a54abe 1
+  s_1846a70968f2de::t_d402a82caf36c8 4,20,22-25
+  s_1846a70968f2de::t_948d3e31e53b02 5-7,18-19,21,26-34
+  s_1846a70968f2de::t_b0f85268233fa0 35-44
+docs/agents/claudes-journal/pastebin-entrypoints.md
+  s_1846a70968f2de::t_8b186c0b505082 1-43
+cloudflare/src/pastebin.ts
+  s_1846a70968f2de::t_948d3e31e53b02 1-37
+  s_1846a70968f2de::t_9376dabe0a97cd 38-53
+openspec/changes/restore-pastebin-entrypoint/proposal.md
+  s_1846a70968f2de::t_7effe1b1156800 1-17
+openspec/project.md
+  s_1846a70968f2de::t_5dc89a36a54abe 27-35
+openspec/changes/restore-pastebin-entrypoint/specs/pastebin-entrypoints/spec.md
+  s_1846a70968f2de::t_7effe1b1156800 1-28
+cloudflare/web/index.html
+  s_1846a70968f2de::t_948d3e31e53b02 16
+cloudflare/src/index.ts
+  s_1846a70968f2de::t_948d3e31e53b02 21,206-207
+static-pastebin/index.html
+  s_1846a70968f2de::t_948d3e31e53b02 1-2,14,17,21,54
+cloudflare/tests/pastebin.test.mjs
+  s_1846a70968f2de::t_7ed77b74fae90c 76,83,122
+  s_1846a70968f2de::t_7effe1b1156800 1-4,6-11,20-22,29-32,41-43,50-52,57,61,70-75,84-87,92,100-102,106-113,120-121,123-126,130-136,147-153
+  s_1846a70968f2de::t_5e4d5982564dcd 5,12-19,23-28,33-40,44-49,53-56,58-60,62-69,77-82,88-91,93-99,103-105,114-119,127-129,139-145
+  s_1846a70968f2de::t_d98775aceac173 137-138,146
+  s_1846a70968f2de::t_1c820f7dc09f65 154-158
+cloudflare/package.json
+  s_1846a70968f2de::t_948d3e31e53b02 8
+scripts/kant-cli.mjs
+  s_1846a70968f2de::t_900293cf48ec7d 2-3,238
+openspec/changes/restore-pastebin-entrypoint/tasks.md
+  s_1846a70968f2de::t_7effe1b1156800 1-8
+.gitignore
+  s_1846a70968f2de::t_2a5fe88c3ea65d 22-26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "eeb4c0bf2003c1291df2fa37e21ccda0194d7e01",
+  "prompts": {},
+  "sessions": {
+    "s_1846a70968f2de": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a131a6-d71a-7dd3-b9f6-597048b4dbe0",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "twilwa <spywarezzz@proton.me>"
+    }
+  }
+}
