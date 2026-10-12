@@ -1,0 +1,11 @@
+<!-- ABOUTME: Identifies the room application in browser tabs. -->
+<!-- ABOUTME: Uses a local icon to avoid third-party asset requests. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <rect width="48" height="48" rx="12" fill="#185546" />
+  <path
+    d="M15 10v28m0-12L32 12M21 21l13 17"
+    stroke="#f3f5ee"
+    stroke-width="5"
+    fill="none"
+  />
+</svg>

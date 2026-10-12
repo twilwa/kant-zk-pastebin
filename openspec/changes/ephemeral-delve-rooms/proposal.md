@@ -1,6 +1,12 @@
 # Ephemeral rooms for Delve participants
 
-Status: proposed for approval. Beads: `br-mgep`, assessment `br-mgep.1`.
+Status: approved by the user's confirmation of temporary agent DMs and
+throwaway links. Beads: `br-mgep`, assessment `br-mgep.1`, implementation
+`br-mgep.2`.
+
+## Capabilities
+
+- `ephemeral-rooms`: authenticated temporary direct-message rooms for Delve accounts.
 
 ## Why
 
@@ -23,7 +29,7 @@ The browser flow is:
 1. Sign in through Delve's OAuth provider. Request only the `atproto` identity
    scope; never collect a Delve password in the room app.
 2. Select the intended recipient by handle, resolve it to an account DID, and
-   show the profile and DID before creation. The owner and that recipient form
+   show the resolved handle and DID before creation. The owner and that recipient form
    an immutable membership list for the first release.
 3. Create a room with a random URL and a selected lifetime: 15 minutes, one
    hour by default, or 24 hours. The URL contains no credential or message.
@@ -62,7 +68,7 @@ CSPRNG. R2 and D1 are unnecessary for this text-only release.
 Room access checks authentication, DID membership, and expiry on every read
 and write. A successful message response follows a durable write. An alarm
 clears expired application data; requests fail closed even if cleanup is late.
-Closing a room is terminal and closes any active connections. Nonexistent or
+Closing a room is terminal and denies subsequent polls. Nonexistent or
 closed room IDs cannot be recreated by posting to them. Polling is sufficient
 for release one; any later socket transport must enforce the same rules.
 
@@ -120,10 +126,10 @@ core SDK is the more suitable entry point for Workers. Workers' Request API
 also rejects `redirect: error`, so the adapter must preserve that refusal
 using supported APIs rather than following redirects.
 
-Plan for several engineering days for a tested release, provisionally three
-to five. This is an estimate, not a delivery commitment. Real Delve sign-in,
-callback validation, storage cleanup, and two-account browser tests are the
-main remaining uncertainties. Adding E2EE requires an additional design for
+The implementation and deployment are recorded in the project journal. Local
+unit, storage, API, and browser tests pass; production account callback and
+two-account exchange validation remain distinct release checks.
+Adding E2EE requires an additional design for
 authenticated key distribution, device keys, and recovery; encrypting with a
 secret pasted publicly would not solve the stated problem.
 

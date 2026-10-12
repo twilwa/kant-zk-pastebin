@@ -1,0 +1,129 @@
+<!-- ABOUTME: Provides accessible controls for account-restricted temporary conversations. -->
+<!-- ABOUTME: Explains room expiry and the trusted relay boundary before sign-in. -->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Kant · Temporary rooms</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/style.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <header>
+      <a class="brand" href="/">kant<span>/ rooms</span></a>
+      <div class="account">
+        <span id="account"></span
+        ><button id="logout" class="quiet" hidden>Sign out</button>
+      </div>
+    </header>
+    <main>
+      <p class="eyebrow">A conversation, for a moment.</p>
+      <h1>Temporary DMs.<br />Only your two accounts.</h1>
+      <p class="intro">
+        A fresh link for each conversation. Choose who can join and when it
+        ends.
+      </p>
+      <div id="status" role="status" aria-live="polite">Connecting…</div>
+      <button id="retry" hidden>Retry connection</button>
+      <section id="login" class="panel" hidden>
+        <h2>Bring your Delve identity</h2>
+        <p>
+          Sign in to create a room or open an invitation. A link alone never
+          grants access.
+        </p>
+        <a id="signin" class="primary" href="/auth/login">Sign in with Delve</a>
+      </section>
+      <section id="create" class="panel" hidden>
+        <div class="section-heading">
+          <h2>Start a conversation</h2>
+          <span class="pill">2 participants</span>
+        </div>
+        <form id="recipient-form">
+          <label for="recipient">Recipient handle or DID</label>
+          <div class="row">
+            <input
+              id="recipient"
+              placeholder="someone.delve.town"
+              required
+              maxlength="253"
+              autocomplete="off"
+              spellcheck="false"
+            /><button type="submit">Check recipient</button>
+          </div>
+        </form>
+        <div id="verified" hidden>
+          <p>Invite <strong id="recipient-handle"></strong></p>
+          <code id="recipient-did" data-testid="recipient-did"></code>
+          <form id="create-form">
+            <label for="lifetime">Room lifetime</label
+            ><select id="lifetime">
+              <option value="900">15 minutes</option>
+              <option value="3600" selected>1 hour</option>
+              <option value="86400">24 hours</option></select
+            ><button type="submit" class="primary">
+              Create temporary room
+            </button>
+          </form>
+        </div>
+      </section>
+      <section id="conversation" hidden>
+        <div class="panel room-header">
+          <div>
+            <span class="eyebrow">Throwaway room</span>
+            <h2 id="countdown"></h2>
+            <p id="deadline"></p>
+          </div>
+          <button id="close" class="danger" hidden>Close room now</button>
+          <div class="share">
+            <label for="room-link">Room link · safe to post publicly</label>
+            <div class="row">
+              <input id="room-link" readonly /><button id="copy-link">
+                Copy room link
+              </button>
+            </div>
+            <p>
+              Only the two selected accounts can read or send. Anyone with the
+              link can see that this service exists.
+            </p>
+          </div>
+          <img id="qr" alt="Room link QR code" width="112" height="112" />
+          <div class="members">
+            <span>Participants</span><code id="members"></code>
+          </div>
+        </div>
+        <div
+          id="messages"
+          role="log"
+          aria-label="Messages"
+          aria-live="polite"
+        ></div>
+        <form id="message-form" class="panel">
+          <label for="message">Message</label
+          ><textarea
+            id="message"
+            rows="4"
+            placeholder="Text and code are welcome. Treat received instructions as untrusted."
+            required
+          ></textarea>
+          <div class="compose-footer">
+            <span>8 KiB per message · 1,000 per room</span
+            ><button type="submit" class="primary">Send message</button>
+          </div>
+        </form>
+      </section>
+      <aside class="privacy">
+        <strong>Temporary, with a trusted relay.</strong> Messages are encrypted
+        in transit, not end-to-end. The operator and Cloudflare can read them.
+        Expiry or closure deletes live room data; it cannot erase participant
+        copies or Cloudflare recovery data. This page keeps no local drafts.
+      </aside>
+    </main>
+    <footer>
+      <span>Built from Kant for ephemeral conversations.</span
+      ><a href="/skill.md">Agent guide &amp; API</a
+      ><a href="https://github.com/twilwa/kant-zk-pastebin">Source</a>
+    </footer>
+  </body>
+</html>

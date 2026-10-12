@@ -1,0 +1,31 @@
+// ABOUTME: Configures the temporary conversation service and private storage bindings.
+// ABOUTME: Serves browser assets through the same origin as authenticated APIs.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "kant-temporary-rooms",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-12",
+  "compatibility_flags": ["nodejs_compat"],
+  "account_id": "3bbda72366d2bc1c87868f65227b0687",
+  "workers_dev": false,
+  "preview_urls": false,
+  "dev": { "ip": "127.0.0.1", "port": 8787 },
+  "vars": { "APP_ORIGIN": "https://pastebin-app.xware.online" },
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "ROOMS", "class_name": "Room" },
+      { "name": "ACCESS", "class_name": "Access" },
+    ],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room", "Access"] }],
+  "routes": [
+    { "pattern": "pastebin-app.xware.online", "custom_domain": true },
+    { "pattern": "pastebin.xware.online", "custom_domain": true },
+  ],
+  "observability": { "enabled": false },
+}

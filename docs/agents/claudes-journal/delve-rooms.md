@@ -30,5 +30,45 @@ endpoint and absence verified through fresh REST and Git reads. The upstream
 tag and fork rendering branch remain intact. Repository-local
 `push.followTags=false` prevents another incidental tag push.
 
-No Cloudflare resources or DNS changes were made. Work tracking remains in
-Beads under br-mgep; the design assessment is br-mgep.1.
+## Cloudflare deployment
+
+The user approved the trusted-relay scope. Implementation is isolated in
+`cloudflare/`; upstream native applications remain intact. `Room` objects enforce
+two DIDs, absolute expiry, idempotent sends, limits, and owner closure. `Access`
+objects hold browser-bound one-use OAuth state, local sessions, and rate limits.
+Room requests cannot initialize a cleared URL. Browser content uses textContent.
+
+Local tests cover real SQLite persistence across restart, simultaneous retries,
+membership, sender spoofing, size/rate/capacity limits, pagination, deadline
+denial, alarm-driven table deletion before any lazy read, and explicit closure.
+Browser tests use real Worker APIs with test-seeded sessions and real public
+Delve identity resolution. They exercise create, distinct throwaway URLs, copy
+links/messages, QR, two-way text, inert markup, outsider denial, expiry, closure,
+logout, and absence of local transcript storage. They do not prove account login.
+No test-authentication route is present in the deployed Worker.
+
+The real Delve provider accepts the deployed metadata and PKCE/DPoP PAR flow.
+Full callback validation with a real user and a two-account production exchange
+remain pending. The user was asked to sign in; no credentials were requested.
+
+Worker `kant-temporary-rooms` is deployed to `pastebin-app.xware.online`; the
+exact `pastebin.xware.online` root/room paths redirect to it. Version
+`2c5136de-df8e-4464-8a6f-c56117f7bb90` is live. HTTPS, metadata, session responses,
+redirects, production sign-in initiation, and browser rendering were verified.
+The wildcard DNS record was untouched. No R2/D1 resources or plan upgrade were
+needed. The Free plan rejected an explicit CPU limit, so deployment uses its
+default limits.
+
+Cloudflare injected analytics and challenge scripts despite a no-store response.
+The restrictive CSP blocked them. Adding `Cache-Control: no-store, no-transform`
+stopped injection without relaxing CSP or changing unrelated zone settings;
+the live page then contained only its own script and emitted no console errors.
+See Cloudflare's [analytics FAQ](https://developers.cloudflare.com/web-analytics/faq/).
+
+Workers' current SQLite deleteAll atomically removes data and alarms. Calling
+deleteAlarm first creates a retention-failure window; the implementation uses
+deleteAll directly. Expiry is live deletion, not a claim about forensic erasure
+of provider recovery copies or participant copies.
+
+Beads `br-mgep.2` tracks implementation and remaining live-account validation;
+the completed design assessment is `br-mgep.1`.
