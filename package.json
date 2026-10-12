@@ -2,9 +2,13 @@
   "name": "kant-pastebin-tests",
   "version": "0.1.0",
   "scripts": {
-    "test": "node test-pastebin.js"
+    "test": "node test-pastebin.js",
+    "test:static": "playwright test tests/static-pastebin.spec.ts --workers=1 --reporter=line --output=scratchpad/test-results/static"
   },
   "dependencies": {
     "puppeteer": "^21.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.58.2"
   }
 }

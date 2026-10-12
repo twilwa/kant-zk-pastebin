@@ -1,4 +1,19 @@
+// ABOUTME: Stores browser-local pastes and synchronizes them with a paste server.
+// ABOUTME: Renders paste fields as text while preserving sharing and QR actions.
 // Static Pastebin - Browser Storage with Optional Server Sync
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function actionArgument(value) {
+  return escapeHtml(JSON.stringify(String(value)));
+}
 
 const DB_NAME = 'kant-pastebin';
 const STORE_NAME = 'pastes';
@@ -116,11 +131,11 @@ async function syncToServer(paste) {
       paste.serverUrl = `${serverUrl}/paste/${data.id}`;
       tx.objectStore(STORE_NAME).put(paste);
       
-      document.getElementById('result').innerHTML += `<br>☁️ Synced to server: ${data.id}`;
+      document.getElementById('result').innerHTML += `<br>☁️ Synced to server: ${escapeHtml(data.id)}`;
       if (data.ipfs_cid) {
-        document.getElementById('result').innerHTML += `<br>📦 IPFS: ${data.ipfs_cid}`;
+        document.getElementById('result').innerHTML += `<br>📦 IPFS: ${escapeHtml(data.ipfs_cid)}`;
       }
-      document.getElementById('result').innerHTML += `<br>🔗 URL: <a href="${paste.serverUrl}" target="_blank">${paste.serverUrl}</a>`;
+      document.getElementById('result').innerHTML += `<br>🔗 URL: <a href="${escapeHtml(paste.serverUrl)}" target="_blank">${escapeHtml(paste.serverUrl)}</a>`;
       
       loadPastes();
     }
@@ -141,14 +156,14 @@ function loadPastes() {
       const url = p.serverId ? `${serverUrl}/paste/${p.serverId}` : '';
       return `
       <div class="paste-item ${p.synced ? 'synced' : ''}">
-        <strong>${p.title}</strong>
+        <strong>${escapeHtml(p.title)}</strong>
         <span class="timestamp">${new Date(p.timestamp).toLocaleString()}</span>
         ${p.synced ? '☁️' : '💾'}
-        ${p.ipfsCid ? `<br><code>ipfs cat ${p.ipfsCid}</code>` : ''}
-        <br><button onclick="viewPaste('${p.id}')">View</button>
-        <button onclick="deletePaste('${p.id}')">Delete</button>
-        ${url ? `<button onclick="shareUrl('${url}')">🔗 Share URL</button>` : ''}
-        ${url ? `<button onclick="showQR('${url}', '${p.title}')">📱 QR Code</button>` : ''}
+        ${p.ipfsCid ? `<br><code>ipfs cat ${escapeHtml(p.ipfsCid)}</code>` : ''}
+        <br><button onclick="viewPaste(${actionArgument(p.id)})">View</button>
+        <button onclick="deletePaste(${actionArgument(p.id)})">Delete</button>
+        ${url ? `<button onclick="shareUrl(${actionArgument(url)})">🔗 Share URL</button>` : ''}
+        ${url ? `<button onclick="showQR(${actionArgument(url)}, ${actionArgument(p.title)})">📱 QR Code</button>` : ''}
       </div>
     `;
     }).join('');
@@ -200,10 +215,10 @@ function showQR(url, title) {
   const qrDiv = document.createElement('div');
   qrDiv.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;padding:20px;border:3px solid #0f0;z-index:1000';
   qrDiv.innerHTML = `
-    <h3 style="color:#000">${title}</h3>
+    <h3 style="color:#000">${escapeHtml(title)}</h3>
     <canvas id="qrcode"></canvas>
     <br><button onclick="copyQR()">📋 Copy</button>
-    <button onclick="shareQR('${url}', '${title}')">🔗 Share</button>
+    <button onclick="shareQR(${actionArgument(url)}, ${actionArgument(title)})">🔗 Share</button>
     <button onclick="this.parentElement.remove()">Close</button>
   `;
   document.body.appendChild(qrDiv);
@@ -270,7 +285,7 @@ function viewPaste(id) {
     document.getElementById('title').value = paste.title;
     document.getElementById('content').value = paste.content;
     document.getElementById('keywords').value = paste.keywords.join(', ');
-    document.getElementById('result').innerHTML = `✅ Loaded: ${paste.title}`;
+    document.getElementById('result').textContent = `✅ Loaded: ${paste.title}`;
   };
 }
 
@@ -303,8 +318,8 @@ window.addEventListener('load', () => {
       
       document.getElementById('result').innerHTML = `
         ✅ Loaded from URL<br>
-        Title: ${data.title}<br>
-        ${data.ipfs_cid ? `IPFS: ${data.ipfs_cid}<br>` : ''}
+        Title: ${escapeHtml(data.title)}<br>
+        ${data.ipfs_cid ? `IPFS: ${escapeHtml(data.ipfs_cid)}<br>` : ''}
         Timestamp: ${new Date(data.timestamp).toLocaleString()}
       `;
     } catch (err) {
