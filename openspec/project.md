@@ -21,3 +21,13 @@ and exercise real browser storage. They do not validate the native server.
 Beads tracks the deployment under `br-mgep` and the approved static rendering
 fix under `br-0k0y`. Store generated test output in `scratchpad/`. Keep the
 rendering change on the fork while upstream considers issue 13.
+
+## Cloudflare deployment target
+
+The intended hosted service is temporary private text rooms for Delve
+participants and browser-capable agents. Rooms are the first-release priority.
+The proposed architecture uses authenticated Delve identities and Durable
+Objects, with the operator and Cloudflare trusted with contents. See
+`changes/ephemeral-delve-rooms/proposal.md` for the proposed scope and
+`.factory/threat-model.md` for the local security assessment. This deployment
+has not been implemented or launched.
