@@ -1,6 +1,6 @@
 // ABOUTME: Serves the local paste editor and proxies hosted pastebin requests.
-// ABOUTME: Isolates origin credentials and directs room links to the room service.
-import { roomId } from "./model";
+// ABOUTME: Isolates origin credentials and returns a retirement notice for room links.
+import { retired } from "./retirement";
 
 const assets = new Set([
   "/app.js",
@@ -83,6 +83,7 @@ async function native(request: Request, env: Env) {
 
 export async function pastebin(request: Request, env: Env) {
   const url = new URL(request.url);
+  if (url.pathname.startsWith("/r/")) return retired(request);
   if (url.pathname === "/native" || url.pathname.startsWith("/native/"))
     return native(request, env);
   let response: Response;
@@ -91,8 +92,6 @@ export async function pastebin(request: Request, env: Env) {
       status: 405,
       headers: { Allow: "GET, HEAD" },
     });
-  } else if (url.pathname.startsWith("/r/") && roomId(url.pathname.slice(3))) {
-    response = Response.redirect(env.APP_ORIGIN + url.pathname, 302);
   } else if (url.pathname === "/health") {
     response = Response.json({ ok: true, service: "pastebin-editor" });
   } else if (url.pathname === "/favicon.ico") {

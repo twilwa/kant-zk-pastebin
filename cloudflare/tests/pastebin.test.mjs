@@ -22,7 +22,7 @@ test("source and downloadable CLI print usable help", () => {
   }
 });
 
-test("pastebin assets and room routes stay on their intended hosts", async () => {
+test("pastebin assets remain available while room routes are retired", async () => {
   const mf = await runtime({ entry: "src/index.ts", assets: true });
   try {
     const get = (path, init = {}) =>
@@ -54,23 +54,20 @@ test("pastebin assets and room routes stay on their intended hosts", async () =>
     ])
       assert.equal((await get(path)).status, 404, path);
     const room = await get("/r/abcdefghijklmnopqrstuv");
-    assert.equal(room.status, 302);
-    assert.equal(
-      room.headers.get("Location"),
-      "http://localhost/r/abcdefghijklmnopqrstuv",
-    );
-    assert.equal((await get("/r/invalid")).status, 404);
+    assert.equal(room.status, 410);
+    assert.equal(room.headers.get("Location"), null);
+    assert.equal((await get("/r/invalid")).status, 410);
     const roomHome = await mf.dispatchFetch("http://localhost/", {
       headers: { "User-Agent": ua },
     });
-    assert.equal(roomHome.status, 200);
+    assert.equal(roomHome.status, 410);
     assert.doesNotMatch(
       roomHome.headers.get("Content-Security-Policy"),
       /unsafe-inline/,
     );
     assert.equal(
       (await mf.dispatchFetch("http://localhost/pastebin/app.js")).status,
-      404,
+      410,
     );
   } finally {
     await mf.dispose();
@@ -110,7 +107,7 @@ test("standalone editor shares local text between browsers without uploading it"
     ).toHaveAttribute("href", "https://pastebin.xware.online/native/");
     await expect(
       page.getByRole("link", { name: "Delve rooms", exact: true }),
-    ).toHaveAttribute("href", "https://pastebin-app.xware.online/");
+    ).toHaveCount(0);
     const title = "Local <note> & café";
     const content = "Text travels in the link, without a server.";
     await page.locator("#title").fill(title);

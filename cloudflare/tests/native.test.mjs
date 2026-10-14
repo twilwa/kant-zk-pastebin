@@ -132,7 +132,7 @@ test("native proxy preserves HTTP behavior while isolating credentials and limit
           headers: { "User-Agent": ua },
         })
       ).status,
-      404,
+      410,
     );
   } finally {
     await mf.dispose();

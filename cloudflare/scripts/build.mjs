@@ -1,21 +1,10 @@
-// ABOUTME: Bundles both browser applications and the downloadable Kant CLI.
-// ABOUTME: Keeps dependencies local so conversation pages do not load third-party scripts.
-import { build } from "esbuild";
-import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+// ABOUTME: Builds the standalone paste editor and downloadable Kant CLI.
+// ABOUTME: Replaces generated assets and keeps browser dependencies on the same host.
+import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 import { delimiter, resolve } from "node:path";
-await mkdir("public", { recursive: true });
-await build({
-  entryPoints: ["web/app.js"],
-  bundle: true,
-  format: "esm",
-  minify: true,
-  outfile: "public/app.js",
-});
-for (const name of ["index.html", "style.css", "skill.md", "favicon.svg"])
-  await copyFile("web/" + name, "public/" + name);
-
+await rm("public", { recursive: true, force: true });
 await mkdir("public/pastebin", { recursive: true });
 for (const name of ["app.js", "style.css"])
   await copyFile("../static-pastebin/" + name, "public/pastebin/" + name);

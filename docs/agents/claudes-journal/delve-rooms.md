@@ -72,3 +72,30 @@ of provider recovery copies or participant copies.
 
 Beads `br-mgep.2` tracks implementation and remaining live-account validation;
 the completed design assessment is `br-mgep.1`.
+
+## Retirement on October 14, 2026
+
+The user requests removal of Delve connectivity following the platform
+maintainers' preference for public communication. Beads `br-mgep.6` tracks this
+retirement. The earlier deployment and OAuth observations above describe the
+historical service; the pending two-account exchange is superseded by retirement.
+
+The editor and native proxy share the `kant-temporary-rooms` Worker, so reverting
+the entire room deployment would also remove infrastructure they need. The
+focused retirement removes room routes, assets, OAuth code, and navigation,
+while the app origin returns HTTP 410 with a general pastebin link. The `Room`
+and `Access` classes retain only expiry cleanup so scheduled deletion continues
+without a destructive migration. Native persistent data remains separate.
+
+Retirement deployed as Cloudflare Worker version
+`5236bf26-c1fa-4b0c-899d-5b65fc0efe0d`. Unit, real Workers integration,
+editor browser, and isolated native browser checks passed. Live checks covered
+33 app-origin GET/POST/HEAD combinations, retired `/r/` links, and unchanged
+raw/IPFS bytes from the deployment verification paste after native restarts.
+
+The native restart exposed interrupted Podman automatic removal: a non-running
+container remained in `removing` state and held the service name. Removing that
+exact stopped container without force restored service, preserving the bind
+mount. The service now runs `podman rm --ignore kant-pastebin` in
+`ExecStopPost`; repeated real restarts passed with `NRestarts=0`. Test containers
+and the SSH forward were stopped after verification.

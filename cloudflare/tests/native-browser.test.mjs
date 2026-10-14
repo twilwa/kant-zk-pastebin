@@ -32,6 +32,9 @@ test("hosted paste creation stays under /native and persists through the proxy",
     });
     await page.goto(origin + "/native/");
     await expect(page.locator("#form")).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: "Temporary rooms", exact: true }),
+    ).toHaveCount(0);
     const title = "Hosted browser verification " + Date.now();
     const content =
       title +

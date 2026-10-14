@@ -3,10 +3,11 @@
 The native Rust service is hosted on `bbchat-ci` behind Cloudflare Tunnel and the
 existing `kant-temporary-rooms` Worker. The public entrypoint is
 `https://pastebin.xware.online/native/`. The root URL remains the browser-local
-editor; temporary Delve rooms remain at `https://pastebin-app.xware.online/`.
+editor. Delve connectivity and temporary rooms are retired;
+`https://pastebin-app.xware.online/` returns an HTTP 410 retirement notice.
 
 Native pastes are public and persistent. They can appear in browse and search.
-They do not inherit the room service's account restrictions or expiry.
+They have no account restrictions or automatic expiry.
 The service supports pastes, replies, raw downloads, file uploads, bounded archive
 extraction, built-in split profiles, search, and content-addressed downloads.
 The upstream custom split-profile endpoint does not persist profiles.
@@ -25,6 +26,15 @@ is installed under the unit name returned by
 The application service requires that mount. HTTP listens on host loopback port 18091. Host-management routes,
 plugins, repository indexing, filesystem diagnostics, and animation jobs are
 outside the public surface.
+
+After the container stops, `ExecStopPost` removes its stopped container record
+by exact name. This handles interrupted automatic removal without force-removing
+a running container or deleting the persistent bind mount.
+
+`PASTEBIN_EDITOR_URL` provides navigation back to the standalone editor.
+`ROOMS_URL` is unset in the deployed service so the native pages do not advertise
+temporary rooms. Removing room navigation does not change the native data
+directory, content-addressed blocks, origin credentials, or public API.
 
 `deploy/native/kant-pastebin-tunnel.service` runs the pinned Cloudflare connector.
 The `kant-pastebin-ci` tunnel forwards `pastebin-origin.xware.online` to port

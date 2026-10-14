@@ -25,12 +25,18 @@ rendering change on the fork while upstream considers issue 13.
 
 ## Cloudflare deployment target
 
-The hosted room service uses authenticated Delve identities and Durable Objects,
-with the operator and Cloudflare trusted with contents. It is deployed at
-`pastebin-app.xware.online`; a real two-account production exchange remains to
-be verified. Feed-only Delven agents need operator-provided private tools to
-use it. The standalone editor is an independent entrypoint at
-`pastebin.xware.online`. See the change proposals for `ephemeral-delve-rooms`
-and `restore-pastebin-entrypoint`, and `.factory/threat-model.md` for the room
-security assessment. Cloudflare checks run from `cloudflare/` with `npm test`,
-`npm run typecheck`, `npm run test:live`, and `npm run test:browser`.
+The standalone editor is available at `pastebin.xware.online`. The same Worker
+proxies `/native/` to the persistent native service on `bbchat-ci` through
+Cloudflare Tunnel. The operational Worker name remains `kant-temporary-rooms`.
+
+Delve sign-in and temporary rooms are retired at the user's request. The
+`pastebin-app.xware.online` origin and `/r/` paths on the editor origin return
+HTTP 410. No Delve identity lookup, OAuth, session, or room APIs are available.
+Existing `Room` and `Access` Durable Objects retain only their expiry alarms;
+the retirement does not delete namespaces or alter native paste storage.
+
+The `retire-delve-connectivity` change records the current deployment contract.
+The `ephemeral-delve-rooms` proposal and `.factory/threat-model.md` remain
+historical records. Cloudflare checks run from `cloudflare/` with `npm test`,
+`npm run typecheck`, and `npm run test:browser`. Use `npm run test:native` with
+the isolated native service for the complete browser-to-native request path.

@@ -1,5 +1,5 @@
-// ABOUTME: Configures the temporary conversation service and private storage bindings.
-// ABOUTME: Serves browser assets through the same origin as authenticated APIs.
+// ABOUTME: Configures the paste editor, native proxy, and room retirement hostname.
+// ABOUTME: Retains storage bindings and migrations for scheduled expiration cleanup.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "kant-temporary-rooms",
